@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  checks: write
 
 env:
   DOTNET_NOLOGO: true
@@ -59,41 +58,6 @@ jobs:
           $text = (Get-Content $result -Raw).Trim()
           Write-Output $text
           if ($text -ne 'OK') { throw 'Smoke test failed' }
-          # Downscaled previews for the temporary check-run step below.
-          Add-Type -AssemblyName System.Drawing
-          $jpeg = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object MimeType -eq 'image/jpeg'
-          $previews = New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'previews')
-          foreach ($shot in Get-ChildItem $shots -Filter *.jpg) {
-            $image = [System.Drawing.Image]::FromFile($shot.FullName)
-            $scale = if ($image.Width -gt 600) { 0.55 } else { 1.0 }
-            $w = [int]($image.Width * $scale); $h = [int]($image.Height * $scale)
-            $small = New-Object System.Drawing.Bitmap $w, $h
-            $g = [System.Drawing.Graphics]::FromImage($small)
-            $g.InterpolationMode = 'HighQualityBicubic'
-            $g.DrawImage($image, 0, 0, $w, $h)
-            $parameters = New-Object System.Drawing.Imaging.EncoderParameters 1
-            $parameters.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality, [long]60)
-            $buffer = New-Object IO.MemoryStream
-            $small.Save($buffer, $jpeg, $parameters)
-            Set-Content -Path (Join-Path $previews "$($shot.BaseName).b64") -Value ([Convert]::ToBase64String($buffer.ToArray())) -NoNewline
-          }
-      - name: Publish previews (temporary)
-        if: matrix.platform == 'x64'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
-          foreach ($file in Get-ChildItem (Join-Path $env:RUNNER_TEMP 'previews') -Filter *.b64) {
-            $text = Get-Content $file.FullName -Raw
-            if ($text.Length -gt 65000) { Write-Output "$($file.Name) too large ($($text.Length))"; continue }
-            $body = @{
-              name = "preview $($file.BaseName)"; head_sha = '${{ github.sha }}'; status = 'completed'; conclusion = 'neutral'
-              output = @{ title = $file.BaseName; summary = 'Base64 JPEG preview'; text = $text }
-            } | ConvertTo-Json -Depth 5
-            $run = Invoke-RestMethod -Method Post -Uri 'https://api.github.com/repos/${{ github.repository }}/check-runs' -Headers $headers -Body $body
-            Write-Output "$($file.BaseName): check run $($run.id) ($($text.Length) chars)"
-          }
       - name: Upload screenshots
         if: matrix.platform == 'x64'
         uses: actions/upload-artifact@v6
