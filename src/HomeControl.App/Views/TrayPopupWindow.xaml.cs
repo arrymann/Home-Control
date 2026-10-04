@@ -98,13 +98,16 @@ public sealed partial class TrayPopupWindow : Window
     internal void ShowAt(PointInt32 anchor)
     {
         _anchor = anchor;
-        UpdateBounds();
+        UpdateBounds(beforeShow: true);
 
+        _isOpen = true;
         AppWindow.Show(true);
         Activate();
         NativeMethods.SetForegroundWindow(_hwnd);
-        _isOpen = true;
         PlayShowAnimation();
+
+        // The first time, the content is laid out only now: re-fit to its real height.
+        RequestResize();
     }
 
     internal void Hide()
@@ -178,13 +181,13 @@ public sealed partial class TrayPopupWindow : Window
             _resizePending = false;
             if (_isOpen)
             {
-                UpdateBounds();
+                UpdateBounds(beforeShow: false);
             }
         });
     }
 
     /// <summary>Sizes the window to its content and places it next to the taskbar.</summary>
-    private void UpdateBounds()
+    private void UpdateBounds(bool beforeShow)
     {
         var display = DisplayArea.GetFromPoint(_anchor, DisplayAreaFallback.Nearest);
         var work = display.WorkArea;
@@ -194,8 +197,8 @@ public sealed partial class TrayPopupWindow : Window
         var margin = (int)Math.Round(ScreenMargin * scale);
         var maxHeight = Math.Max(160, work.Height / scale - 2 * ScreenMargin);
 
-        // Hidden: move onto the target monitor first so a DPI change happens before sizing.
-        if (!_isOpen)
+        // Not visible yet: move onto the target monitor first so a DPI change happens before sizing.
+        if (beforeShow)
         {
             AppWindow.Move(new PointInt32(work.X + margin, work.Y + margin));
         }
