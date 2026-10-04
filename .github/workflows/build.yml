@@ -17,8 +17,8 @@ jobs:
     name: Core tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
       - name: Test
@@ -32,8 +32,8 @@ jobs:
       matrix:
         platform: [x64, ARM64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
       - name: Publish
@@ -43,7 +43,7 @@ jobs:
           dotnet publish src/HomeControl.App/HomeControl.App.csproj `
             -c Release -p:Platform=${{ matrix.platform }} -r $rid --self-contained `
             -o publish/HomeControl-$rid
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: HomeControl-${{ matrix.platform }}
           path: publish/

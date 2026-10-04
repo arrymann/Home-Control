@@ -4,7 +4,6 @@ using HomeControl.Helpers;
 using HomeControl.Interop;
 using HomeControl.Services;
 using HomeControl.ViewModels;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
@@ -174,7 +173,7 @@ public sealed partial class TrayPopupWindow : Window
         }
 
         _resizePending = true;
-        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             _resizePending = false;
             if (_isOpen)

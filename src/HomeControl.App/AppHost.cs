@@ -258,7 +258,17 @@ internal sealed class AppHost
         var bindings = new List<HotkeyBinding>();
         if (Settings.OpenPopupHotkey is { IsValid: true } openHotkey)
         {
-            bindings.Add(new HotkeyBinding(openHotkey, "Open Home Control", ShowPopup));
+            bindings.Add(new HotkeyBinding(openHotkey, "Open Home Control", () =>
+            {
+                if (_popup.IsOpen)
+                {
+                    _popup.Hide();
+                }
+                else
+                {
+                    ShowPopup();
+                }
+            }));
         }
 
         foreach (var device in Settings.Devices)
