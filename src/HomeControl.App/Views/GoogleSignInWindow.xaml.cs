@@ -146,7 +146,7 @@ public sealed partial class GoogleSignInWindow : Window
             var core = Browser.CoreWebView2;
             core.Settings.AreHostObjectsAllowed = false;
             core.Settings.IsWebMessageEnabled = false;
-            core.NewWindowRequested += (_, args) =>
+            core.NewWindowRequested += (sender, args) =>
             {
                 // Keep Google's sign-in steps (e.g. "use another account") in this window; other
                 // links (Help, Privacy, Terms…) open in the default browser so the sign-in isn't lost.
