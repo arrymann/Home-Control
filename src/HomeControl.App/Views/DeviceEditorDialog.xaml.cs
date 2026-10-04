@@ -161,7 +161,9 @@ public sealed partial class DeviceEditorDialog : ContentDialog
         }
     }
 
-    private bool IsServiceReady => _device.IsGoogleHome ? App.Host.Settings.GoogleHome.Enabled : App.Host.Account.IsSignedIn;
+    // Google Home devices are switched through Assistant (by name) while signed out of Google Home.
+    private bool IsServiceReady =>
+        App.Host.Account.IsSignedIn || (_device.IsGoogleHome && App.Host.Settings.GoogleHome.Enabled);
 
     private bool CanTest => IsServiceReady && !string.IsNullOrWhiteSpace(NameBox.Text);
 

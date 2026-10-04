@@ -319,12 +319,25 @@ public class CompositeDeviceControllerTests
 {
     private static DeviceConfig Pc() => new() { Source = DeviceSource.GoogleHome, Name = "Pc", GoogleHomeId = "d4" };
 
-    private static (CompositeDeviceController Controller, FakeAssistantClient Assistant) Create(Func<FoyerResponse> foyer, bool fallback)
+    private static (CompositeDeviceController Controller, FakeAssistantClient Assistant) Create(
+        Func<FoyerResponse> foyer, bool fallback, bool googleHomeEnabled = true)
     {
         var assistant = new FakeAssistantClient(_ => "OK, turning on the Pc.");
         var googleHome = new GoogleHomeDeviceController(new GoogleHomeClient(new FakeFoyerTransport((_, _, _) => foyer())));
         var assistantController = new Assistant.AssistantDeviceController(assistant, () => new Settings.AssistantSettings());
-        return (new CompositeDeviceController(googleHome, assistantController, () => fallback), assistant);
+        return (new CompositeDeviceController(googleHome, assistantController, () => fallback, () => googleHomeEnabled), assistant);
+    }
+
+    [Fact]
+    public async Task Signed_out_of_google_home_on_purpose_goes_straight_to_assistant()
+    {
+        var (controller, assistant) = Create(() => throw new InvalidOperationException("must not be called"), fallback: true, googleHomeEnabled: false);
+
+        var result = await controller.SetPowerAsync(Pc(), true, default);
+
+        Assert.True(result.Success);
+        Assert.Equal(["turn on Pc"], assistant.Queries);
+        Assert.False(controller.CanReadInBatch(Pc()));
     }
 
     [Fact]

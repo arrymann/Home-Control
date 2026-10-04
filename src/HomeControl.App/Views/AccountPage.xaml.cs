@@ -136,6 +136,16 @@ public sealed partial class AccountPage : Page
             _ => $"Signed in  ·  {devices}{synced}",
         };
 
+        // The account index changes at sign-in and sign-out.
+        if (AuthUserBox.Value != settings.AuthUser || RefreshSecondsBox.Value != settings.RefreshSeconds)
+        {
+            var loading = _loading;
+            _loading = true;
+            AuthUserBox.Value = settings.AuthUser;
+            RefreshSecondsBox.Value = settings.RefreshSeconds;
+            _loading = loading;
+        }
+
         GoogleHomeSignInButton.Visibility = signedOut ? Visibility.Visible : Visibility.Collapsed;
         GoogleHomeSyncButton.Visibility = signedOut ? Visibility.Collapsed : Visibility.Visible;
         GoogleHomeSyncButton.IsEnabled = !syncing;
@@ -202,15 +212,16 @@ public sealed partial class AccountPage : Page
             return;
         }
 
+        // Only the box that changed: the other may show a value that was updated elsewhere since
+        // (e.g. the account index found at sign-in).
         var settings = App.Host.Settings.GoogleHome;
-        if (!double.IsNaN(AuthUserBox.Value))
+        if (sender == AuthUserBox)
         {
-            settings.AuthUser = (int)Math.Clamp(AuthUserBox.Value, 0, 9);
+            settings.AuthUser = (int)Math.Clamp(sender.Value, 0, 9);
         }
-
-        if (!double.IsNaN(RefreshSecondsBox.Value))
+        else
         {
-            settings.RefreshSeconds = (int)Math.Clamp(RefreshSecondsBox.Value, 3, 300);
+            settings.RefreshSeconds = (int)Math.Clamp(sender.Value, 3, 300);
         }
 
         App.Host.SaveSettings();

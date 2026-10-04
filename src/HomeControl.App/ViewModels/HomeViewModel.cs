@@ -18,7 +18,8 @@ public sealed class HomeViewModel : BindableBase
     private bool _hasClient;
     private bool _googleHomeConnected;
     private bool _isRefreshing;
-    private bool _batchRefreshRunning;
+    private Task? _batchRead;
+    private int _refreshesRunning;
     private bool _isSyncing;
     private bool _showRooms;
     private string? _errorMessage;
@@ -232,27 +233,43 @@ public sealed class HomeViewModel : BindableBase
             return;
         }
 
-        _refreshCts?.Cancel();
-        var cts = _refreshCts = new CancellationTokenSource();
+        var batched = Devices.Where(d => BatchReader?.CanReadInBatch(d.Config) == true).ToList();
+        var others = includeAssistant && _assistantSignedIn ? Devices.Except(batched).ToList() : [];
+
+        // Only a refresh that asks Assistant replaces (cancels) an earlier one's Assistant queries;
+        // a Google Home-only refresh, e.g. right after a sync, leaves them running.
+        CancellationTokenSource? cts = null;
+        if (others.Count > 0)
+        {
+            _refreshCts?.Cancel();
+            cts = _refreshCts = new CancellationTokenSource();
+        }
+
+        _refreshesRunning++;
         IsRefreshing = true;
         IsErrorOpen = false;
         try
         {
-            var batched = Devices.Where(d => BatchReader?.CanReadInBatch(d.Config) == true).ToList();
-            var others = includeAssistant && _assistantSignedIn ? Devices.Except(batched).ToList() : [];
             await Task.WhenAll(
-                RefreshBatchAsync(batched, showErrors: true, cts.Token),
-                RunLimitedAsync(others, d => d.RefreshStateAsync(cts.Token)));
+                RefreshBatchAsync(batched, showErrors: true),
+                RunLimitedAsync(others, d => d.RefreshStateAsync(cts!.Token)));
         }
         finally
         {
-            if (_refreshCts == cts)
+            if (--_refreshesRunning == 0)
             {
                 IsRefreshing = false;
-                _refreshCts = null;
             }
 
-            cts.Dispose();
+            if (cts is not null)
+            {
+                if (_refreshCts == cts)
+                {
+                    _refreshCts = null;
+                }
+
+                cts.Dispose();
+            }
         }
     }
 
@@ -260,14 +277,14 @@ public sealed class HomeViewModel : BindableBase
     public Task PollStatesAsync()
     {
         var batched = Devices.Where(d => BatchReader?.CanReadInBatch(d.Config) == true).ToList();
-        return RefreshBatchAsync(batched, showErrors: false, CancellationToken.None);
+        return RefreshBatchAsync(batched, showErrors: false);
     }
 
     /// <summary>Toggles a device from its shortcut, reading its current state first if it is old.</summary>
     public async Task<DeviceCommandResult?> ToggleFromShortcutAsync(DeviceViewModel device)
     {
-        // Read directly rather than through RefreshBatchAsync, which skips the read while a poll is
-        // running; devices hidden from the popup are never polled, so this is their only read.
+        // Read just this device, right away: a poll in flight may not include it (devices hidden
+        // from the popup are never polled), and waiting for one would delay the shortcut.
         if (BatchReader is { } reader && reader.CanReadInBatch(device.Config) && device.IsStale(TimeSpan.FromSeconds(20)))
         {
             try
@@ -321,18 +338,49 @@ public sealed class HomeViewModel : BindableBase
         GoogleHomeSignInRequired?.Invoke(this, EventArgs.Empty);
     }
 
-    private async Task RefreshBatchAsync(IReadOnlyList<DeviceViewModel> devices, bool showErrors, CancellationToken cancellationToken)
+    /// <summary>
+    /// Reads the states of Google Home devices in one request. A poll is skipped while another read
+    /// is running; any other refresh waits for that read and then reads again, so it always ends
+    /// with fresh states or a visible error.
+    /// </summary>
+    private async Task RefreshBatchAsync(IReadOnlyList<DeviceViewModel> devices, bool showErrors)
     {
-        if (devices.Count == 0 || BatchReader is not { } reader || _batchRefreshRunning)
+        if (devices.Count == 0 || BatchReader is not { } reader)
         {
             return;
         }
 
-        _batchRefreshRunning = true;
+        if (_batchRead is { } running)
+        {
+            if (!showErrors)
+            {
+                return;
+            }
+
+            await running; // never throws
+        }
+
+        var read = ReadBatchAsync(reader, devices, showErrors);
+        _batchRead = read;
+        try
+        {
+            await read;
+        }
+        finally
+        {
+            if (_batchRead == read)
+            {
+                _batchRead = null;
+            }
+        }
+    }
+
+    private async Task ReadBatchAsync(IBatchStateReader reader, IReadOnlyList<DeviceViewModel> devices, bool showErrors)
+    {
         try
         {
             var started = Stopwatch.GetTimestamp();
-            var states = await reader.ReadStatesAsync(devices.Select(d => d.Config).ToList(), cancellationToken);
+            var states = await reader.ReadStatesAsync(devices.Select(d => d.Config).ToList(), CancellationToken.None);
             foreach (var device in devices)
             {
                 if (states.TryGetValue(device.Id, out var status))
@@ -362,10 +410,6 @@ public sealed class HomeViewModel : BindableBase
             {
                 ReportError(ex is GoogleHomeException ? ex.Message : "Couldn't refresh the devices: " + ex.Message);
             }
-        }
-        finally
-        {
-            _batchRefreshRunning = false;
         }
     }
 

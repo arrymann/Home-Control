@@ -12,6 +12,19 @@ using Windows.Graphics;
 
 namespace HomeControl.Views;
 
+/// <summary>How the sync after a sign-in went (reported back to the sign-in window).</summary>
+internal enum GoogleSignInOutcome
+{
+    /// <summary>Google Home accepted the session and the devices were loaded.</summary>
+    Synced,
+
+    /// <summary>Google Home rejected the session although the browser has Google cookies.</summary>
+    Rejected,
+
+    /// <summary>Something else went wrong (network, Google changed the site…).</summary>
+    Failed,
+}
+
 /// <summary>
 /// Shows home.google.com so the user can sign in to Google. It uses the same private browser
 /// profile as the hidden Google Home page, so once home.google.com loads signed in here, the
@@ -27,6 +40,10 @@ public sealed partial class GoogleSignInWindow : Window
     private readonly GoogleHomeSession _session;
     private bool _signedIn;
     private bool _sentToSignIn;
+    private bool _retriedSignIn;
+    private bool _browserStarted;
+    private bool _closed;
+    private int? _reportedAuthUser;
     private BackdropKind? _backdrop;
 
     internal GoogleSignInWindow(GoogleHomeSession session)
@@ -48,9 +65,13 @@ public sealed partial class GoogleSignInWindow : Window
             work.X + (work.Width - size.Width) / 2, work.Y + (work.Height - size.Height) / 2, size.Width, size.Height));
 
         Root.Loaded += async (_, _) => await InitializeBrowserAsync();
+        Closed += (_, _) => _closed = true;
     }
 
-    /// <summary>Raised once home.google.com has loaded signed in.</summary>
+    /// <summary>
+    /// Raised when home.google.com loaded with a Google session, and again when the user
+    /// switches to another account. The host then syncs and calls <see cref="ReportSignInResult"/>.
+    /// </summary>
     internal event EventHandler? SignedIn;
 
     /// <summary>
@@ -73,8 +94,51 @@ public sealed partial class GoogleSignInWindow : Window
         SolidBackground.Visibility = SystemBackdrop is null ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    /// <summary>Shows how the sync after the sign-in went; a rejected session goes back to Google's sign-in.</summary>
+    internal void ReportSignInResult(GoogleSignInOutcome outcome, string? detail)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        LoadingRing.IsActive = false;
+        switch (outcome)
+        {
+            case GoogleSignInOutcome.Synced:
+                ShowStatus(InfoBarSeverity.Success, $"Signed in. Found {detail} in your Google Home – you can close this window.");
+                DoneButton.Visibility = Visibility.Visible;
+                break;
+
+            case GoogleSignInOutcome.Rejected when !_retriedSignIn && Browser.CoreWebView2 is { } core:
+                // Old cookies (e.g. after a password change) look like a session but aren't one.
+                _retriedSignIn = true;
+                _signedIn = false;
+                _sentToSignIn = true;
+                ShowStatus(InfoBarSeverity.Warning, "Google Home didn't accept this session. Please sign in again.");
+                core.Navigate(SignInUrl);
+                break;
+
+            case GoogleSignInOutcome.Rejected:
+                ShowStatus(InfoBarSeverity.Error,
+                    "Google Home still doesn't accept the sign-in. If several Google accounts are signed in, set the account index under Advanced on the Account page.");
+                break;
+
+            default:
+                ShowStatus(InfoBarSeverity.Warning, $"Signed in, but your devices couldn't be loaded: {detail}");
+                DoneButton.Visibility = Visibility.Visible;
+                break;
+        }
+    }
+
     private async Task InitializeBrowserAsync()
     {
+        if (_browserStarted)
+        {
+            return;
+        }
+
+        _browserStarted = true;
         try
         {
             var environment = await _session.GetEnvironmentAsync();
@@ -84,9 +148,17 @@ public sealed partial class GoogleSignInWindow : Window
             core.Settings.IsWebMessageEnabled = false;
             core.NewWindowRequested += (_, args) =>
             {
-                // Keep Google's sign-in steps (e.g. "use another account") in this window.
+                // Keep Google's sign-in steps (e.g. "use another account") in this window; other
+                // links (Help, Privacy, Terms…) open in the default browser so the sign-in isn't lost.
                 args.Handled = true;
-                core.Navigate(args.Uri);
+                if (GoogleHomeSession.IsGoogleSignInPage(args.Uri) || GoogleHomeSession.IsHomePage(args.Uri))
+                {
+                    core.Navigate(args.Uri);
+                }
+                else if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var link) && link.Scheme == Uri.UriSchemeHttps)
+                {
+                    _ = Windows.System.Launcher.LaunchUriAsync(link);
+                }
             };
             core.NavigationStarting += (_, _) => LoadingRing.IsActive = true;
             core.ProcessFailed += (_, args) => Log.Info($"Sign-in window: browser process failed ({args.ProcessFailedKind}).");
@@ -95,7 +167,7 @@ public sealed partial class GoogleSignInWindow : Window
                 Log.Info($"Sign-in window: {DescribeUrl(core.Source)} {(args.IsSuccess ? "loaded" : $"failed ({args.WebErrorStatus})")}.");
                 try
                 {
-                    await OnNavigationCompletedAsync(core);
+                    await OnNavigationCompletedAsync(core, args);
                 }
                 catch (Exception ex)
                 {
@@ -112,15 +184,30 @@ public sealed partial class GoogleSignInWindow : Window
         }
     }
 
-    private async Task OnNavigationCompletedAsync(CoreWebView2 core)
+    private async Task OnNavigationCompletedAsync(CoreWebView2 core, CoreWebView2NavigationCompletedEventArgs args)
     {
         LoadingRing.IsActive = false;
+        if (_closed)
+        {
+            return;
+        }
+
+        if (!args.IsSuccess)
+        {
+            if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+            {
+                ShowStatus(InfoBarSeverity.Error, $"The page couldn't be loaded ({args.WebErrorStatus}). Check your internet connection.");
+            }
+
+            return;
+        }
+
         if (GoogleHomeSession.IsHomePage(core.Source) && ParseAuthUser(core.Source) is { } authUser)
         {
             AuthUser = authUser;
         }
 
-        if (_signedIn || !GoogleHomeSession.IsHomePage(core.Source))
+        if (!GoogleHomeSession.IsHomePage(core.Source))
         {
             if (GoogleHomeSession.IsGoogleSignInPage(core.Source) && !_signedIn)
             {
@@ -132,6 +219,11 @@ public sealed partial class GoogleSignInWindow : Window
         }
 
         var cookies = await core.CookieManager.GetCookiesAsync("https://home.google.com");
+        if (_closed)
+        {
+            return;
+        }
+
         if (!cookies.Any(c => c.Name is "SAPISID" or "__Secure-3PAPISID"))
         {
             // home.google.com without a session shows its marketing page (with "Sign in" hidden in a
@@ -147,10 +239,19 @@ public sealed partial class GoogleSignInWindow : Window
             return;
         }
 
+        // Signed in to Google. The host checks that Google Home accepts the session (by syncing)
+        // and reports back; switching accounts on the page later triggers another check.
+        if (_signedIn && AuthUser == _reportedAuthUser)
+        {
+            return;
+        }
+
         _signedIn = true;
+        _reportedAuthUser = AuthUser;
         _session.Invalidate();
-        ShowStatus(InfoBarSeverity.Success, "Signed in. Home Control is loading your devices – you can close this window.");
-        DoneButton.Visibility = Visibility.Visible;
+        LoadingRing.IsActive = true;
+        ShowStatus(InfoBarSeverity.Informational, "Signed in to Google. Loading your devices from Google Home…");
+        DoneButton.Visibility = Visibility.Collapsed;
         SignedIn?.Invoke(this, EventArgs.Empty);
     }
 

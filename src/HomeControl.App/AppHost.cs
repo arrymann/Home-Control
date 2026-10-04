@@ -37,6 +37,7 @@ internal sealed class AppHost
     private DispatcherQueueTimer _pollTimer = null!;
     private Task<GoogleHomeSyncResult>? _syncTask;
     private int _googleHomeSignOuts;
+    private bool _syncFailed;
     private IntPtr _trayIconHandle;
     private int _trayIconDpi;
     private bool _trayIconLight;
@@ -119,7 +120,8 @@ internal sealed class AppHost
         Controller = new CompositeDeviceController(
             new GoogleHomeDeviceController(_googleHome),
             new AssistantDeviceController(_assistant, () => Settings.Assistant),
-            () => Settings.UseAssistantFallback && Account.IsSignedIn);
+            () => Settings.UseAssistantFallback && Account.IsSignedIn,
+            () => Settings.GoogleHome.Enabled);
 
         Home = new HomeViewModel(Controller, Account);
         Home.LoadDevices(Settings.Devices);
@@ -286,6 +288,7 @@ internal sealed class AppHost
         {
             var result = await task;
             GoogleHomeMessage = null;
+            _syncFailed = false;
             return result;
         }
         catch (Exception ex)
@@ -295,6 +298,9 @@ internal sealed class AppHost
                 GoogleHomeMessage = ex is GoogleHomeException ? ex.Message : "Couldn't load your devices: " + ex.Message;
             }
 
+            // Not signed in needs the user; anything else (no network yet, a page that didn't load)
+            // is retried when Google Home answers again or the popup opens.
+            _syncFailed = ex is not GoogleHomeSignInRequiredException;
             throw;
         }
         finally
@@ -315,6 +321,8 @@ internal sealed class AppHost
         _googleHomeSignOuts++; // a sync that is still running must not sign back in
         _signInWindow?.Close();
         Settings.GoogleHome.Enabled = false;
+        Settings.GoogleHome.AuthUser = 0; // the profile is emptied: the next sign-in is account 0
+        _syncFailed = false;
         SaveSettings();
         Home.SetGoogleHomeConnected(false);
         try
@@ -386,10 +394,34 @@ internal sealed class AppHost
         _ = Home.RefreshStatesAsync(includeAssistant: Settings.RefreshStatesOnOpen);
         _pollTimer.Interval = TimeSpan.FromSeconds(Settings.GoogleHome.RefreshSeconds);
         _pollTimer.Start();
+
+        // The last sync failed (e.g. no network at startup), or the first one never finished.
+        if (Settings.GoogleHome.Enabled && (_syncFailed || Settings.GoogleHome.LastSync is null))
+        {
+            _ = SyncQuietlyAsync();
+        }
     }
 
+    /// <summary>
+    /// The sign-in window found a Google session on home.google.com. Cookies alone don't prove
+    /// Google Home accepts it, so sync now and tell the window how that went: a rejected session
+    /// sends the user back to Google's sign-in page.
+    /// </summary>
     private async Task OnGoogleSignedInAsync(GoogleSignInWindow window)
     {
+        // A sync that is already running may use the previous account: let it finish, then sync again.
+        if (_syncTask is { } running)
+        {
+            try
+            {
+                await running;
+            }
+            catch (Exception)
+            {
+                // reported by that sync
+            }
+        }
+
         if (window.AuthUser is { } authUser && authUser != Settings.GoogleHome.AuthUser)
         {
             Settings.GoogleHome.AuthUser = authUser;
@@ -398,7 +430,21 @@ internal sealed class AppHost
         Settings.GoogleHome.Enabled = true;
         SaveSettings();
         Home.SetGoogleHomeConnected(true);
-        await SyncQuietlyAsync();
+        try
+        {
+            var result = await SyncGoogleHomeAsync();
+            var count = Settings.Devices.Count(d => d.IsGoogleHome && !d.Missing);
+            window.ReportSignInResult(GoogleSignInOutcome.Synced, count == 1 ? "1 device" : $"{count} devices");
+        }
+        catch (GoogleHomeSignInRequiredException)
+        {
+            window.ReportSignInResult(GoogleSignInOutcome.Rejected, null);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Syncing Google Home after signing in", ex);
+            window.ReportSignInResult(GoogleSignInOutcome.Failed, ex.Message);
+        }
     }
 
     /// <summary>Syncs in the background; problems show on the settings pages and in the popup.</summary>
@@ -408,9 +454,18 @@ internal sealed class AppHost
         {
             await SyncGoogleHomeAsync();
         }
+        catch (GoogleHomeSignInRequiredException ex)
+        {
+            Log.Info("Google Home sync: " + ex.Message);
+        }
         catch (Exception ex)
         {
             Log.Error("Syncing Google Home", ex);
+            if (Home.Devices.Count == 0)
+            {
+                // Nothing in the popup to show the problem on otherwise.
+                Home.ReportError(GoogleHomeMessage ?? ex.Message);
+            }
         }
     }
 
@@ -440,6 +495,12 @@ internal sealed class AppHost
         {
             case GoogleHomeConnection.Connected:
                 Home.SetGoogleHomeConnected(true);
+                if (_syncFailed && _syncTask is null && Settings.GoogleHome.Enabled && !IsSmokeTest)
+                {
+                    _syncFailed = false;
+                    _ = SyncQuietlyAsync(); // the connection is back: catch up on the failed sync
+                }
+
                 break;
             case GoogleHomeConnection.SignedOut:
             case GoogleHomeConnection.Unavailable:
