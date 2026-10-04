@@ -133,7 +133,7 @@ internal static class SmokeTest
         }
 
         // Google Home: the sign-in window, a script in the hidden page, and a sync without a session.
-        await Step("google sign-in", host.OpenGoogleSignIn, () => host.SignInWindowHandle, waitMs: 6000);
+        await Step("google sign-in", host.OpenGoogleSignIn, () => host.SignInWindowHandle, waitMs: 9000);
         await Step("close google sign-in", host.CloseGoogleSignIn, waitMs: 500);
         await RunGoogleHomeChecksAsync(host, errors);
         await Step("flyout signed out", host.ShowPopup, () => host.PopupWindowHandle, waitMs: 2000);

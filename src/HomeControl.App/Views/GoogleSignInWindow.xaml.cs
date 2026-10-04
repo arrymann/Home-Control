@@ -19,10 +19,14 @@ namespace HomeControl.Views;
 /// </summary>
 public sealed partial class GoogleSignInWindow : Window
 {
+    /// <summary>Google's sign-in page, returning to home.google.com afterwards.</summary>
+    private const string SignInUrl = "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fhome.google.com%2F";
+
     private static readonly Regex AuthUserPattern = new(@"(?:/u/|[?&]authuser=)(\d{1,2})(?:[/?&#]|$)", RegexOptions.IgnoreCase);
 
     private readonly GoogleHomeSession _session;
     private bool _signedIn;
+    private bool _sentToSignIn;
 
     internal GoogleSignInWindow(GoogleHomeSession session)
     {
@@ -122,8 +126,16 @@ public sealed partial class GoogleSignInWindow : Window
         var cookies = await core.CookieManager.GetCookiesAsync("https://home.google.com");
         if (!cookies.Any(c => c.Name is "SAPISID" or "__Secure-3PAPISID"))
         {
-            // home.google.com without a session shows its welcome page; let the user click "Sign in".
-            ShowStatus(InfoBarSeverity.Informational, "Click “Sign in” on the page to connect your Google account.");
+            // home.google.com without a session shows its marketing page (with "Sign in" hidden in a
+            // menu at this window size): go to Google's sign-in page instead, once.
+            if (!_sentToSignIn)
+            {
+                _sentToSignIn = true;
+                core.Navigate(SignInUrl);
+                return;
+            }
+
+            ShowStatus(InfoBarSeverity.Informational, "Click “Sign in” on the page (in the ☰ menu) to connect your Google account.");
             return;
         }
 
