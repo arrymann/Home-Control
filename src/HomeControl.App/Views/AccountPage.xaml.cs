@@ -17,10 +17,13 @@ public sealed partial class AccountPage : Page
         "pt-BR", "nl-NL", "da-DK", "sv-SE", "nb-NO", "ja-JP", "ko-KR", "hi-IN",
     ];
 
-    private CancellationTokenSource? _signInCts;
+    // A Google Assistant sign-in keeps running when the settings window closes, so it is shared
+    // with the page of the next settings window (only one exists at a time).
+    private static CancellationTokenSource? _pendingSignIn;
+    private static AccountPage? _visiblePage;
+
     private string? _syncSummary;
     private bool _loading;
-    private bool _onScreen;
 
     public AccountPage()
     {
@@ -36,7 +39,7 @@ public sealed partial class AccountPage : Page
         base.OnNavigatedTo(e);
         Account.StateChanged += OnAccountStateChanged;
         App.Host.GoogleHomeChanged += OnGoogleHomeChanged;
-        _onScreen = true;
+        _visiblePage = this;
         Load();
     }
 
@@ -45,13 +48,16 @@ public sealed partial class AccountPage : Page
         base.OnNavigatedFrom(e);
         Account.StateChanged -= OnAccountStateChanged;
         App.Host.GoogleHomeChanged -= OnGoogleHomeChanged;
-        _onScreen = false;
+        if (_visiblePage == this)
+        {
+            _visiblePage = null;
+        }
 
         // Switching pages cancels a sign-in that is waiting for the browser; closing the settings
         // window (which navigates to a blank Page) lets it finish in the background.
         if (e.SourcePageType != typeof(Page))
         {
-            _signInCts?.Cancel();
+            _pendingSignIn?.Cancel();
         }
     }
 
@@ -97,7 +103,7 @@ public sealed partial class AccountPage : Page
 
     private void UpdateStatus()
     {
-        var signingIn = _signInCts is not null;
+        var signingIn = _pendingSignIn is not null;
         ClientStatus.Text = Account.HasClient ? "Ready" : "Not set up";
 
         SignInCard.Description = Account.IsSignedIn
@@ -303,12 +309,17 @@ public sealed partial class AccountPage : Page
             return;
         }
 
+        if (_pendingSignIn is not null)
+        {
+            return; // one is already waiting for the browser
+        }
+
         SignInError.IsOpen = false;
-        _signInCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var cts = _pendingSignIn = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         UpdateStatus();
         try
         {
-            await Account.SignInAsync(OpenBrowser, _signInCts.Token);
+            await Account.SignInAsync(OpenBrowser, cts.Token);
             App.Host.Home.UpdateAccountState();
         }
         catch (OperationCanceledException)
@@ -317,10 +328,10 @@ public sealed partial class AccountPage : Page
         }
         catch (Exception ex) when (ex is OAuthException or HttpRequestException)
         {
-            if (_onScreen)
+            if (_visiblePage is { } page)
             {
-                SignInError.Message = ex.Message;
-                SignInError.IsOpen = true;
+                page.SignInError.Message = ex.Message;
+                page.SignInError.IsOpen = true;
             }
             else
             {
@@ -329,16 +340,17 @@ public sealed partial class AccountPage : Page
         }
         finally
         {
-            _signInCts?.Dispose();
-            _signInCts = null;
-            if (_onScreen)
+            if (_pendingSignIn == cts)
             {
-                UpdateStatus();
+                _pendingSignIn = null;
             }
+
+            cts.Dispose();
+            _visiblePage?.UpdateStatus();
         }
     }
 
-    private void OnCancelSignInClick(object sender, RoutedEventArgs e) => _signInCts?.Cancel();
+    private void OnCancelSignInClick(object sender, RoutedEventArgs e) => _pendingSignIn?.Cancel();
 
     private async void OnSignOutClick(object sender, RoutedEventArgs e)
     {

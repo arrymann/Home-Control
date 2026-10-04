@@ -410,6 +410,7 @@ internal sealed class AppHost
     private async Task OnGoogleSignedInAsync(GoogleSignInWindow window)
     {
         // A sync that is already running may use the previous account: let it finish, then sync again.
+        var signOuts = _googleHomeSignOuts;
         if (_syncTask is { } running)
         {
             try
@@ -420,6 +421,11 @@ internal sealed class AppHost
             {
                 // reported by that sync
             }
+        }
+
+        if (signOuts != _googleHomeSignOuts)
+        {
+            return; // the user signed out meanwhile
         }
 
         if (window.AuthUser is { } authUser && authUser != Settings.GoogleHome.AuthUser)
@@ -438,6 +444,8 @@ internal sealed class AppHost
         }
         catch (GoogleHomeSignInRequiredException)
         {
+            // The session may already have been SignedOut, so no state change would tell the popup.
+            Home.SetGoogleHomeConnected(false);
             window.ReportSignInResult(GoogleSignInOutcome.Rejected, null);
         }
         catch (Exception ex)

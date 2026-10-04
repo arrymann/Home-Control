@@ -44,6 +44,7 @@ public sealed partial class GoogleSignInWindow : Window
     private bool _browserStarted;
     private bool _closed;
     private int? _reportedAuthUser;
+    private string? _reportedSession;
     private BackdropKind? _backdrop;
 
     internal GoogleSignInWindow(GoogleHomeSession session)
@@ -224,8 +225,14 @@ public sealed partial class GoogleSignInWindow : Window
             return;
         }
 
-        if (!cookies.Any(c => c.Name is "SAPISID" or "__Secure-3PAPISID"))
+        var session = cookies.FirstOrDefault(c => c.Name is "SAPISID" or "__Secure-3PAPISID")?.Value;
+        if (session is null)
         {
+            // Signed out on the page: the next sign-in (maybe another account) must be checked again.
+            _signedIn = false;
+            _reportedAuthUser = null;
+            _reportedSession = null;
+
             // home.google.com without a session shows its marketing page (with "Sign in" hidden in a
             // menu at this window size): go to Google's sign-in page instead, once.
             if (!_sentToSignIn)
@@ -241,13 +248,14 @@ public sealed partial class GoogleSignInWindow : Window
 
         // Signed in to Google. The host checks that Google Home accepts the session (by syncing)
         // and reports back; switching accounts on the page later triggers another check.
-        if (_signedIn && AuthUser == _reportedAuthUser)
+        if (_signedIn && AuthUser == _reportedAuthUser && session == _reportedSession)
         {
             return;
         }
 
         _signedIn = true;
         _reportedAuthUser = AuthUser;
+        _reportedSession = session;
         _session.Invalidate();
         LoadingRing.IsActive = true;
         ShowStatus(InfoBarSeverity.Informational, "Signed in to Google. Loading your devices from Google Home…");
