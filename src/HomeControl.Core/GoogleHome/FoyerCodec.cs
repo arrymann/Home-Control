@@ -199,7 +199,7 @@ public static class FoyerCodec
             }
 
             bool? online = null, isOn = null;
-            string? error = null;
+            string? error = null, challenge = null;
             foreach (var trait in Items(At(result, 1)))
             {
                 var fields = Fields(At(trait, 1));
@@ -216,6 +216,13 @@ public static class FoyerCodec
                             error = Str(At(errorWrapper, 2));
                         }
 
+                        // A command the partner gates behind a PIN or an acknowledgement comes back
+                        // as ["challenge",[null,null,"pinNeeded"]] instead of being carried out.
+                        if (fields.TryGetValue("challenge", out var challengeWrapper))
+                        {
+                            challenge = Str(At(challengeWrapper, 2));
+                        }
+
                         break;
                     case "onOff":
                         if (fields.TryGetValue("onOff", out var onOffWrapper))
@@ -227,7 +234,7 @@ public static class FoyerCodec
                 }
             }
 
-            states.Add(new GoogleHomeDeviceState(id, online, isOn, error));
+            states.Add(new GoogleHomeDeviceState(id, online, isOn, error ?? challenge));
         }
 
         return states;

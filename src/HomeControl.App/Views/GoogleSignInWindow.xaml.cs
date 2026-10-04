@@ -58,6 +58,7 @@ public sealed partial class GoogleSignInWindow : Window
     {
         Root.RequestedTheme = theme;
         WindowHelpers.SetDarkFrame(WindowHelpers.GetHandle(this), theme == ElementTheme.Dark);
+        WindowHelpers.SetCaptionButtonColors(AppWindow.TitleBar, theme == ElementTheme.Dark);
         SystemBackdrop = Backdrops.Create(backdrop);
         SolidBackground.Visibility = SystemBackdrop is null ? Visibility.Visible : Visibility.Collapsed;
     }

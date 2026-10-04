@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using HomeControl.Core.Auth;
 using HomeControl.Core.Devices;
 using HomeControl.Core.GoogleHome;
@@ -23,6 +24,9 @@ public sealed class HomeViewModel : BindableBase
     private string? _errorMessage;
     private bool _isErrorOpen;
     private CancellationTokenSource? _refreshCts;
+
+    // Devices hidden from the popup still work with their shortcuts.
+    private Dictionary<string, DeviceViewModel> _hidden = [];
 
     internal HomeViewModel(IDeviceController controller, GoogleAccount account)
     {
@@ -163,8 +167,8 @@ public sealed class HomeViewModel : BindableBase
         var visible = configs.Where(c => !c.Hidden && !c.Missing).ToList();
         var showRooms = visible.Select(c => c.Room).Where(r => !string.IsNullOrWhiteSpace(r)).Distinct(StringComparer.CurrentCultureIgnoreCase).Count() > 1;
 
-        var existing = Devices.ToDictionary(d => d.Id);
-        var ordered = visible.Select(config =>
+        var existing = Devices.Concat(_hidden.Values).ToDictionary(d => d.Id);
+        DeviceViewModel Reuse(DeviceConfig config)
         {
             if (existing.TryGetValue(config.Id, out var vm))
             {
@@ -173,7 +177,10 @@ public sealed class HomeViewModel : BindableBase
             }
 
             return new DeviceViewModel(this, config);
-        }).ToList();
+        }
+
+        var ordered = visible.Select(Reuse).ToList();
+        _hidden = configs.Where(c => c.Hidden && !c.Missing).Select(Reuse).ToDictionary(d => d.Id);
 
         if (!ordered.SequenceEqual(Devices))
         {
@@ -211,7 +218,8 @@ public sealed class HomeViewModel : BindableBase
         CloseErrorIfConnected();
     }
 
-    public DeviceViewModel? Find(string id) => Devices.FirstOrDefault(d => d.Id == id);
+    /// <summary>A device by id, including devices hidden from the popup (for shortcuts).</summary>
+    public DeviceViewModel? Find(string id) => Devices.FirstOrDefault(d => d.Id == id) ?? _hidden.GetValueOrDefault(id);
 
     /// <summary>
     /// Refreshes every device: Google Home devices in one request, Assistant devices one by one
@@ -308,12 +316,13 @@ public sealed class HomeViewModel : BindableBase
         _batchRefreshRunning = true;
         try
         {
+            var started = Stopwatch.GetTimestamp();
             var states = await reader.ReadStatesAsync(devices.Select(d => d.Config).ToList(), cancellationToken);
             foreach (var device in devices)
             {
                 if (states.TryGetValue(device.Id, out var status))
                 {
-                    device.ApplyStatus(status);
+                    device.ApplyStatus(status, started);
                 }
             }
 

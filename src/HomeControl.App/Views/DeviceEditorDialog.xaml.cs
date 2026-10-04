@@ -64,6 +64,24 @@ public sealed partial class DeviceEditorDialog : ContentDialog
     /// <summary>The edited device (valid after the dialog returned Primary).</summary>
     public DeviceConfig Result => _device;
 
+    /// <summary>
+    /// Copies what the user can change in this dialog onto <paramref name="target"/>, leaving
+    /// everything else (for example ids and rooms updated by a sync meanwhile) as it is.
+    /// </summary>
+    internal void ApplyTo(DeviceConfig target)
+    {
+        target.DisplayName = _device.DisplayName;
+        target.Kind = _device.Kind;
+        target.Hotkey = _device.Hotkey;
+        if (!target.IsGoogleHome)
+        {
+            target.Name = _device.Name;
+            target.OnCommand = _device.OnCommand;
+            target.OffCommand = _device.OffCommand;
+            target.StateQuery = _device.StateQuery;
+        }
+    }
+
     private void OnNameChanged(object sender, TextChangedEventArgs e)
     {
         ErrorText.Visibility = Visibility.Collapsed;

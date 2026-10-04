@@ -186,11 +186,10 @@ public sealed partial class DevicesPage : Page
         var dialog = new DeviceEditorDialog(devices[index]) { XamlRoot = XamlRoot, RequestedTheme = ActualTheme };
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
-            // The list may have changed while the dialog was open; replace by id.
-            var current = devices.FindIndex(d => d.Id == dialog.Result.Id);
-            if (current >= 0)
+            // The list may have changed while the dialog was open (a sync, for example).
+            if (devices.FirstOrDefault(d => d.Id == dialog.Result.Id) is { } current)
             {
-                devices[current] = dialog.Result;
+                dialog.ApplyTo(current);
                 App.Host.SaveSettings();
             }
         }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using HomeControl.Core.Assistant;
 using HomeControl.Core.Auth;
 using HomeControl.Core.Devices;
@@ -20,6 +21,7 @@ public sealed class DeviceViewModel : BindableBase
     private string? _busyText;
     private string? _error;
     private DateTimeOffset _lastUpdated = DateTimeOffset.MinValue;
+    private long _lastCommandEnded;
 
     internal DeviceViewModel(HomeViewModel owner, DeviceConfig config)
     {
@@ -139,10 +141,14 @@ public sealed class DeviceViewModel : BindableBase
 
     internal void RefreshSubtitle() => OnPropertyChanged(nameof(Subtitle));
 
-    /// <summary>Applies a state read in a batch (ignored while a command is in flight).</summary>
-    internal void ApplyStatus(DeviceStatus status)
+    /// <summary>
+    /// Applies a state read in a batch. Ignored while a command is in flight, and when the read
+    /// was sent before the last command finished (it would undo the command's newer state).
+    /// </summary>
+    /// <param name="readStarted">Stopwatch timestamp taken just before the read was sent.</param>
+    internal void ApplyStatus(DeviceStatus status, long readStarted)
     {
-        if (_isBusy)
+        if (_isBusy || readStarted <= _lastCommandEnded)
         {
             return;
         }
@@ -200,6 +206,7 @@ public sealed class DeviceViewModel : BindableBase
         }
         finally
         {
+            _lastCommandEnded = Stopwatch.GetTimestamp();
             IsBusy = false;
             SyncToggle(_state ?? false);
         }

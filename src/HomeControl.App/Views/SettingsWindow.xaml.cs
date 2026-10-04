@@ -2,7 +2,6 @@ using HomeControl.Core.Settings;
 using HomeControl.Helpers;
 using HomeControl.Interop;
 using HomeControl.Services;
-using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -40,6 +39,19 @@ public sealed partial class SettingsWindow : Window
             work.Y + (work.Height - size.Height) / 2,
             size.Width,
             size.Height));
+
+        // Leave the current page so it unsubscribes from the app's events (OnNavigatedFrom).
+        Closed += (_, _) =>
+        {
+            try
+            {
+                ContentFrame.Navigate(typeof(Page));
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Leaving the settings page", ex);
+            }
+        };
     }
 
     public void Show(string? page)
@@ -73,17 +85,7 @@ public sealed partial class SettingsWindow : Window
         var dark = theme == ElementTheme.Dark;
         WindowHelpers.SetDarkFrame(_hwnd, dark);
 
-        // The caption buttons are drawn by the system; color them to match the theme.
-        var titleBar = AppWindow.TitleBar;
-        var foreground = dark ? Colors.White : Colors.Black;
-        titleBar.ButtonBackgroundColor = Colors.Transparent;
-        titleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
-        titleBar.ButtonForegroundColor = foreground;
-        titleBar.ButtonHoverForegroundColor = foreground;
-        titleBar.ButtonPressedForegroundColor = foreground;
-        titleBar.ButtonInactiveForegroundColor = dark ? ColorHelper.FromArgb(0x5D, 0xFF, 0xFF, 0xFF) : ColorHelper.FromArgb(0x5C, 0x00, 0x00, 0x00);
-        titleBar.ButtonHoverBackgroundColor = dark ? ColorHelper.FromArgb(0x0F, 0xFF, 0xFF, 0xFF) : ColorHelper.FromArgb(0x09, 0x00, 0x00, 0x00);
-        titleBar.ButtonPressedBackgroundColor = dark ? ColorHelper.FromArgb(0x0A, 0xFF, 0xFF, 0xFF) : ColorHelper.FromArgb(0x06, 0x00, 0x00, 0x00);
+        WindowHelpers.SetCaptionButtonColors(AppWindow.TitleBar, dark);
 
         if (_backdrop != backdrop)
         {

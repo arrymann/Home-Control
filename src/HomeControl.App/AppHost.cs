@@ -36,6 +36,7 @@ internal sealed class AppHost
     private GoogleHomeClient _googleHome = null!;
     private DispatcherQueueTimer _pollTimer = null!;
     private Task<GoogleHomeSyncResult>? _syncTask;
+    private int _googleHomeSignOuts;
     private IntPtr _trayIconHandle;
     private int _trayIconDpi;
     private bool _trayIconLight;
@@ -287,7 +288,11 @@ internal sealed class AppHost
         }
         catch (Exception ex)
         {
-            GoogleHomeMessage = ex is GoogleHomeException ? ex.Message : "Couldn't load your devices: " + ex.Message;
+            if (Settings.GoogleHome.Enabled)
+            {
+                GoogleHomeMessage = ex is GoogleHomeException ? ex.Message : "Couldn't load your devices: " + ex.Message;
+            }
+
             throw;
         }
         finally
@@ -305,6 +310,7 @@ internal sealed class AppHost
     /// <summary>Signs out of Google Home: deletes the private browser profile's cookies and data.</summary>
     public async Task SignOutGoogleHomeAsync()
     {
+        _googleHomeSignOuts++; // a sync that is still running must not sign back in
         _signInWindow?.Close();
         Settings.GoogleHome.Enabled = false;
         SaveSettings();
@@ -408,7 +414,13 @@ internal sealed class AppHost
 
     private async Task<GoogleHomeSyncResult> RunSyncAsync()
     {
+        var signOuts = _googleHomeSignOuts;
         var graph = await _googleHome.GetHomeGraphAsync(CancellationToken.None);
+        if (signOuts != _googleHomeSignOuts)
+        {
+            throw new GoogleHomeSignInRequiredException("You signed out of Google Home.");
+        }
+
         var result = GoogleHomeSync.Merge(Settings.Devices, graph);
         Log.Info($"Google Home sync: {graph.Devices.Count} devices in {graph.Homes.Count} home(s); {result}");
 
@@ -503,7 +515,7 @@ internal sealed class AppHost
             }));
         }
 
-        foreach (var device in Settings.Devices)
+        foreach (var device in Settings.Devices.Where(d => !d.Missing))
         {
             if (device.Hotkey is { IsValid: true } hotkey)
             {

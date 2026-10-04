@@ -280,6 +280,22 @@ public class GoogleHomeDeviceControllerTests
     }
 
     [Fact]
+    public async Task A_command_that_needs_a_confirmation_is_a_failure()
+    {
+        // The partner gates on/off behind an acknowledgement: nothing was switched.
+        var reply = """[[[["d1",["agent","p"]],[["deviceStatus",[["online",[null,null,null,1]],["challenge",[null,null,"ackNeeded"]]]],["onOff",[["onOff",[null,null,null,0]]]]]]]]""";
+        var transport = new FakeFoyerTransport((_, _, _) => new FoyerResponse(200, reply));
+        var controller = new GoogleHomeDeviceController(new GoogleHomeClient(transport));
+
+        var result = await controller.SetPowerAsync(Desk(), true, default);
+
+        Assert.False(result.Success);
+        Assert.False(result.IsOn);
+        Assert.Contains("confirmation", result.Message);
+        Assert.Single(transport.Calls); // the echo is used, no read-back
+    }
+
+    [Fact]
     public async Task Reads_states_in_one_batch_keyed_by_config_id()
     {
         var transport = new FakeFoyerTransport((_, _, _) => new FoyerResponse(200, Fixtures.Traits(("d1", true, true), ("d2", false, false))));

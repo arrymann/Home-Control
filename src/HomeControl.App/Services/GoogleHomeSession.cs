@@ -301,7 +301,17 @@ internal sealed class GoogleHomeSession : IFoyerTransport, IDisposable
     private static async Task NavigateAsync(CoreWebView2 core, string url, CancellationToken cancellationToken)
     {
         var completed = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnCompleted(CoreWebView2 sender, CoreWebView2NavigationCompletedEventArgs args) => completed.TrySetResult(args);
+        void OnCompleted(CoreWebView2 sender, CoreWebView2NavigationCompletedEventArgs args)
+        {
+            // A navigation that was still running is cancelled by ours (or ours by a redirect):
+            // wait for the one that actually finishes.
+            if (!args.IsSuccess && args.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled)
+            {
+                return;
+            }
+
+            completed.TrySetResult(args);
+        }
 
         core.NavigationCompleted += OnCompleted;
         try

@@ -140,8 +140,6 @@ internal static class SmokeTest
 
         try
         {
-            await File.WriteAllTextAsync        try
-        {
             await File.WriteAllTextAsync(resultPath, errors.Count == 0 ? "OK" : string.Join(Environment.NewLine, errors));
         }
         finally

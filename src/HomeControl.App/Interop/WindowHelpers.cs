@@ -1,4 +1,6 @@
 using HomeControl.Core.Settings;
+using Microsoft.UI;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Windows.Graphics;
 using static HomeControl.Interop.NativeMethods;
@@ -14,6 +16,23 @@ internal static class WindowHelpers
     {
         var value = dark ? 1 : 0;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
+    }
+
+    /// <summary>
+    /// Colors the system caption buttons (minimize, maximize, close) of a window with a custom
+    /// title bar to match the app theme; the system draws them, so they don't follow XAML.
+    /// </summary>
+    public static void SetCaptionButtonColors(AppWindowTitleBar titleBar, bool dark)
+    {
+        var foreground = dark ? Colors.White : Colors.Black;
+        titleBar.ButtonBackgroundColor = Colors.Transparent;
+        titleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
+        titleBar.ButtonForegroundColor = foreground;
+        titleBar.ButtonHoverForegroundColor = foreground;
+        titleBar.ButtonPressedForegroundColor = foreground;
+        titleBar.ButtonInactiveForegroundColor = dark ? ColorHelper.FromArgb(0x5D, 0xFF, 0xFF, 0xFF) : ColorHelper.FromArgb(0x5C, 0x00, 0x00, 0x00);
+        titleBar.ButtonHoverBackgroundColor = dark ? ColorHelper.FromArgb(0x0F, 0xFF, 0xFF, 0xFF) : ColorHelper.FromArgb(0x09, 0x00, 0x00, 0x00);
+        titleBar.ButtonPressedBackgroundColor = dark ? ColorHelper.FromArgb(0x0A, 0xFF, 0xFF, 0xFF) : ColorHelper.FromArgb(0x06, 0x00, 0x00, 0x00);
     }
 
     /// <summary>Rounded corners on Windows 11 (ignored on Windows 10).</summary>
