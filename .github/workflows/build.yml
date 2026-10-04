@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  checks: write
 
 env:
   DOTNET_NOLOGO: true
@@ -58,15 +59,37 @@ jobs:
           $text = (Get-Content $result -Raw).Trim()
           Write-Output $text
           if ($text -ne 'OK') { throw 'Smoke test failed' }
-      - name: Print screenshots (temporary)
+      - name: Publish screenshot previews (temporary)
         if: matrix.platform == 'x64'
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          Get-ChildItem (Join-Path $env:RUNNER_TEMP 'screenshots') -Filter *.jpg | ForEach-Object {
-            $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
-            for ($i = 0; $i -lt $b64.Length; $i += 3000) {
-              Write-Output ("SHOT {0} {1}" -f $_.Name, $b64.Substring($i, [Math]::Min(3000, $b64.Length - $i)))
+          Add-Type -AssemblyName System.Drawing
+          $jpeg = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object MimeType -eq 'image/jpeg'
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          foreach ($shot in Get-ChildItem (Join-Path $env:RUNNER_TEMP 'screenshots') -Filter *.jpg) {
+            $image = [System.Drawing.Image]::FromFile($shot.FullName)
+            $text = $null
+            foreach ($scale in 1.0, 0.8, 0.65, 0.5, 0.4) {
+              $w = [int]($image.Width * $scale); $h = [int]($image.Height * $scale)
+              $small = New-Object System.Drawing.Bitmap $w, $h
+              $g = [System.Drawing.Graphics]::FromImage($small)
+              $g.InterpolationMode = 'HighQualityBicubic'
+              $g.DrawImage($image, 0, 0, $w, $h)
+              $parameters = New-Object System.Drawing.Imaging.EncoderParameters 1
+              $parameters.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality, [long]70)
+              $buffer = New-Object IO.MemoryStream
+              $small.Save($buffer, $jpeg, $parameters)
+              $text = [Convert]::ToBase64String($buffer.ToArray())
+              if ($text.Length -le 65000) { break }
             }
+            $body = @{
+              name = "preview $($shot.BaseName)"; head_sha = '${{ github.sha }}'; status = 'completed'; conclusion = 'neutral'
+              output = @{ title = $shot.BaseName; summary = 'Base64 JPEG preview'; text = $text }
+            } | ConvertTo-Json -Depth 5
+            $run = Invoke-RestMethod -Method Post -Uri 'https://api.github.com/repos/${{ github.repository }}/check-runs' -Headers $headers -Body $body
+            Write-Output "$($shot.BaseName): check run $($run.id) ($($text.Length) chars)"
           }
       - name: Upload screenshots
         if: matrix.platform == 'x64'
