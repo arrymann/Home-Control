@@ -46,7 +46,7 @@ dotnet build src/HomeControl.App -p:Platform=x64
 dotnet publish src/HomeControl.App -c Release -p:Platform=x64 -r win-x64 --self-contained -o publish
 ```
 
-Use `-p:Platform=ARM64 -r win-arm64` for ARM devices. Every push also builds both architectures on GitHub Actions; the published app is attached to the run as an artifact.
+Use `-p:Platform=ARM64 -r win-arm64` for ARM devices. Every push also builds both architectures on GitHub Actions and attaches the published app to the run as an artifact. CI also launches the x64 build with `--smoke-test`, which opens the flyout and every settings page in light and dark theme, fails on any runtime error, and uploads screenshots (the *Screenshots* artifact).
 
 The core library (Google sign-in, Assistant client, settings, shortcuts) is cross-platform and has unit tests:
 

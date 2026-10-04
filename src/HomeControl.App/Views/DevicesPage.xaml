@@ -7,6 +7,12 @@
     xmlns:local="using:HomeControl.Views"
     xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
 
+    <Page.Resources>
+        <!-- Disabled icon buttons (Move up on the first device...) stay borderless. -->
+        <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
+        <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="Transparent" />
+    </Page.Resources>
+
     <ScrollViewer>
         <StackPanel
             MaxWidth="{StaticResource SettingsPageMaxWidth}"

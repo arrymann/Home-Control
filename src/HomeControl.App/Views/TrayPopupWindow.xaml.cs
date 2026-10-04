@@ -193,8 +193,19 @@ public sealed partial class TrayPopupWindow : Window
         var scale = WindowHelpers.GetScaleForPoint(_anchor);
         var margin = (int)Math.Round(ScreenMargin * scale);
         var maxHeight = Math.Max(160, work.Height / scale - 2 * ScreenMargin);
-        var width = (int)Math.Round(PopupWidth * scale);
-        var height = (int)Math.Round(Math.Min(MeasureContentHeight(), maxHeight) * scale);
+
+        // Hidden: move onto the target monitor first so a DPI change happens before sizing.
+        if (!_isOpen)
+        {
+            AppWindow.Move(new PointInt32(work.X + margin, work.Y + margin));
+        }
+
+        // Size the client area to the content; the frame adds a thin border around it.
+        AppWindow.ResizeClient(new SizeInt32(
+            (int)Math.Round(PopupWidth * scale),
+            (int)Math.Round(Math.Min(MeasureContentHeight(), maxHeight) * scale)));
+        var width = AppWindow.Size.Width;
+        var height = AppWindow.Size.Height;
 
         int x, y;
         switch (_edge)
@@ -217,9 +228,7 @@ public sealed partial class TrayPopupWindow : Window
                 break;
         }
 
-        // Move first so a DPI change between monitors happens before the final size is set.
         AppWindow.Move(new PointInt32(x, y));
-        AppWindow.MoveAndResize(new RectInt32(x, y, width, height));
     }
 
     private double MeasureContentHeight()
