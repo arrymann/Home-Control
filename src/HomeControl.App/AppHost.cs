@@ -82,6 +82,8 @@ internal sealed class AppHost
 
     internal IntPtr SignInWindowHandle => _signInWindow is null ? IntPtr.Zero : WindowHelpers.GetHandle(_signInWindow);
 
+    internal string DescribeSignInWindow() => _signInWindow?.DescribeForTest() ?? "closed";
+
     /// <summary>Raised after settings were saved and applied.</summary>
     public event EventHandler? SettingsApplied;
 

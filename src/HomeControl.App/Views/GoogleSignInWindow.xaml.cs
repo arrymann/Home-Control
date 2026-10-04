@@ -27,6 +27,7 @@ public sealed partial class GoogleSignInWindow : Window
     private readonly GoogleHomeSession _session;
     private bool _signedIn;
     private bool _sentToSignIn;
+    private BackdropKind? _backdrop;
 
     internal GoogleSignInWindow(GoogleHomeSession session)
     {
@@ -63,7 +64,12 @@ public sealed partial class GoogleSignInWindow : Window
         Root.RequestedTheme = theme;
         WindowHelpers.SetDarkFrame(WindowHelpers.GetHandle(this), theme == ElementTheme.Dark);
         WindowHelpers.SetCaptionButtonColors(AppWindow.TitleBar, theme == ElementTheme.Dark);
-        SystemBackdrop = Backdrops.Create(backdrop);
+        if (_backdrop != backdrop)
+        {
+            _backdrop = backdrop;
+            SystemBackdrop = Backdrops.Create(backdrop);
+        }
+
         SolidBackground.Visibility = SystemBackdrop is null ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -83,8 +89,10 @@ public sealed partial class GoogleSignInWindow : Window
                 core.Navigate(args.Uri);
             };
             core.NavigationStarting += (_, _) => LoadingRing.IsActive = true;
-            core.NavigationCompleted += async (_, _) =>
+            core.ProcessFailed += (_, args) => Log.Info($"Sign-in window: browser process failed ({args.ProcessFailedKind}).");
+            core.NavigationCompleted += async (_, args) =>
             {
+                Log.Info($"Sign-in window: {DescribeUrl(core.Source)} {(args.IsSuccess ? "loaded" : $"failed ({args.WebErrorStatus})")}.");
                 try
                 {
                     await OnNavigationCompletedAsync(core);
@@ -145,6 +153,15 @@ public sealed partial class GoogleSignInWindow : Window
         DoneButton.Visibility = Visibility.Visible;
         SignedIn?.Invoke(this, EventArgs.Empty);
     }
+
+    /// <summary>Smoke test only: what the window shows right now.</summary>
+    internal string DescribeForTest() =>
+        $"page {DescribeUrl(Browser.CoreWebView2?.Source)}, browser {Browser.ActualWidth:0}x{Browser.ActualHeight:0}, " +
+        $"window content {Root.ActualWidth:0}x{Root.ActualHeight:0}, status “{StatusBar.Message}”";
+
+    /// <summary>Host and path only: sign-in URLs carry long state parameters.</summary>
+    private static string DescribeUrl(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host + uri.AbsolutePath : "(none)";
 
     internal static int? ParseAuthUser(string? url) =>
         url is not null && AuthUserPattern.Match(url) is { Success: true } match ? int.Parse(match.Groups[1].Value) : null;
