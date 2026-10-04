@@ -48,8 +48,9 @@ jobs:
         shell: pwsh
         run: |
           $result = Join-Path $env:RUNNER_TEMP 'smoke-test.txt'
+          $shots = Join-Path $env:RUNNER_TEMP 'screenshots'
           $app = Start-Process -FilePath 'publish/HomeControl-win-x64/HomeControl.exe' `
-            -ArgumentList '--smoke-test', $result -PassThru
+            -ArgumentList '--smoke-test', $result, $shots -PassThru
           if (-not $app.WaitForExit(180000)) { $app.Kill(); throw 'Smoke test timed out' }
           $log = Join-Path $env:LOCALAPPDATA 'HomeControl\home-control.log'
           if (Test-Path $log) { Get-Content $log }
@@ -57,6 +58,28 @@ jobs:
           $text = (Get-Content $result -Raw).Trim()
           Write-Output $text
           if ($text -ne 'OK') { throw 'Smoke test failed' }
+          # Two small previews in the log (full-size screenshots are in the Screenshots artifact).
+          Add-Type -AssemblyName System.Drawing
+          $jpeg = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object MimeType -eq 'image/jpeg'
+          foreach ($preview in @(@('flyout-dark.jpg', 1.0), @('settings-devices-dark.jpg', 0.5))) {
+            $image = [System.Drawing.Image]::FromFile((Join-Path $shots $preview[0]))
+            $w = [int]($image.Width * $preview[1]); $h = [int]($image.Height * $preview[1])
+            $small = New-Object System.Drawing.Bitmap $w, $h
+            $g = [System.Drawing.Graphics]::FromImage($small)
+            $g.InterpolationMode = 'HighQualityBicubic'
+            $g.DrawImage($image, 0, 0, $w, $h)
+            $parameters = New-Object System.Drawing.Imaging.EncoderParameters 1
+            $parameters.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality, [long]60)
+            $buffer = New-Object IO.MemoryStream
+            $small.Save($buffer, $jpeg, $parameters)
+            Write-Output "PREVIEW $($preview[0]) $([Convert]::ToBase64String($buffer.ToArray()))"
+          }
+      - name: Upload screenshots
+        if: matrix.platform == 'x64'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Screenshots
+          path: ${{ runner.temp }}/screenshots/
       - uses: actions/upload-artifact@v6
         with:
           name: HomeControl-${{ matrix.platform }}

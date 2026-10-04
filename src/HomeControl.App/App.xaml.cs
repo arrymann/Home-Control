@@ -41,7 +41,8 @@ public partial class App : Application
             var resultPath = smokeTest + 1 < arguments.Length
                 ? arguments[smokeTest + 1]
                 : Path.Combine(Path.GetTempPath(), "homecontrol-smoke-test.txt");
-            _ = SmokeTest.RunAsync(Host, resultPath);
+            var screenshots = smokeTest + 2 < arguments.Length ? arguments[smokeTest + 2] : null;
+            _ = SmokeTest.RunAsync(Host, resultPath, screenshots);
         }
     }
 }

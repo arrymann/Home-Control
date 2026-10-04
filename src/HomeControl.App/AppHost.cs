@@ -47,6 +47,8 @@ internal sealed class AppHost
 
     public ThemeService Theme => _theme;
 
+    public IntPtr PopupWindowHandle => WindowHelpers.GetHandle(_popup);
+
     /// <summary>XAML root of the settings window, for dialogs.</summary>
     public XamlRoot? SettingsXamlRoot => _settingsWindow?.Content.XamlRoot;
 
@@ -312,7 +314,8 @@ internal sealed class AppHost
         _trayIcon.ShowNotification(device.Label, text);
     }
 
-    private void ApplyAppearance()
+    /// <summary>Applies theme and window material to every window and the tray icon.</summary>
+    public void ApplyAppearance()
     {
         var theme = EffectiveTheme;
         WindowHelpers.SetMenuTheme(Settings.Theme);
