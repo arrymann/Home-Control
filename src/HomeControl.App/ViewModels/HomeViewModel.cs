@@ -1,19 +1,25 @@
 using System.Collections.ObjectModel;
-using HomeControl.Core.Assistant;
 using HomeControl.Core.Auth;
+using HomeControl.Core.Devices;
+using HomeControl.Core.GoogleHome;
 using HomeControl.Core.Models;
+using HomeControl.Services;
 
 namespace HomeControl.ViewModels;
 
-/// <summary>State of the tray popup: the device list plus sign-in and error status.</summary>
+/// <summary>State of the tray popup: the device list plus connection and error status.</summary>
 public sealed class HomeViewModel : BindableBase
 {
     private const int MaxParallelRequests = 3;
 
     private readonly GoogleAccount _account;
-    private bool _isSignedIn;
+    private bool _assistantSignedIn;
     private bool _hasClient;
+    private bool _googleHomeConnected;
     private bool _isRefreshing;
+    private bool _batchRefreshRunning;
+    private bool _isSyncing;
+    private bool _showRooms;
     private string? _errorMessage;
     private bool _isErrorOpen;
     private CancellationTokenSource? _refreshCts;
@@ -28,14 +34,31 @@ public sealed class HomeViewModel : BindableBase
 
     internal IDeviceController Controller { get; }
 
+    private IBatchStateReader? BatchReader => Controller as IBatchStateReader;
+
+    /// <summary>Devices shown in the popup (hidden and missing devices are left out).</summary>
     public ObservableCollection<DeviceViewModel> Devices { get; } = [];
 
-    public bool IsSignedIn
+    /// <summary>Google Assistant is signed in.</summary>
+    public bool IsAssistantSignedIn
     {
-        get => _isSignedIn;
+        get => _assistantSignedIn;
         private set
         {
-            if (SetProperty(ref _isSignedIn, value))
+            if (SetProperty(ref _assistantSignedIn, value))
+            {
+                RaiseListChanged();
+            }
+        }
+    }
+
+    /// <summary>The Google Home web session works.</summary>
+    public bool IsGoogleHomeConnected
+    {
+        get => _googleHomeConnected;
+        private set
+        {
+            if (SetProperty(ref _googleHomeConnected, value))
             {
                 RaiseListChanged();
             }
@@ -48,13 +71,34 @@ public sealed class HomeViewModel : BindableBase
         private set => SetProperty(ref _hasClient, value);
     }
 
+    /// <summary>At least one way of switching devices is set up.</summary>
+    public bool IsConnected => _googleHomeConnected || _assistantSignedIn;
+
     public bool HasDevices => Devices.Count > 0;
 
-    public bool NeedsSignIn => !_isSignedIn;
+    /// <summary>The device list is being loaded from Google Home (set by the host).</summary>
+    public bool IsSyncing
+    {
+        get => _isSyncing;
+        internal set
+        {
+            if (SetProperty(ref _isSyncing, value))
+            {
+                RaiseListChanged();
+            }
+        }
+    }
 
-    public bool ShowNoDevices => _isSignedIn && Devices.Count == 0;
+    public bool NeedsSignIn => !IsConnected;
 
-    public bool ShowDevices => _isSignedIn && Devices.Count > 0;
+    public bool ShowLoading => IsConnected && Devices.Count == 0 && _isSyncing;
+
+    public bool ShowNoDevices => IsConnected && Devices.Count == 0 && !_isSyncing;
+
+    public bool ShowDevices => IsConnected && Devices.Count > 0;
+
+    /// <summary>Rows show their room when the devices are spread over several rooms.</summary>
+    internal bool ShowRooms => _showRooms;
 
     public bool IsRefreshing
     {
@@ -88,14 +132,14 @@ public sealed class HomeViewModel : BindableBase
     {
         get
         {
-            if (!_isSignedIn)
+            if (!IsConnected)
             {
-                return _hasClient ? "Not signed in" : "Not set up yet";
+                return "Not connected";
             }
 
             if (Devices.Count == 0)
             {
-                return "No devices";
+                return _isSyncing ? "Loading devices…" : "No devices";
             }
 
             var on = Devices.Count(d => d.State == true);
@@ -107,14 +151,20 @@ public sealed class HomeViewModel : BindableBase
     /// <summary>Raised when the Assistant rejected our credentials.</summary>
     public event EventHandler? AuthenticationRequired;
 
+    /// <summary>Raised when the Google Home session turned out to be signed out.</summary>
+    public event EventHandler? GoogleHomeSignInRequired;
+
     /// <summary>Raised when rows were added or removed (the popup resizes).</summary>
     public event EventHandler? LayoutChanged;
 
     /// <summary>Syncs the rows with the configured devices, keeping known states.</summary>
     internal void LoadDevices(IReadOnlyList<DeviceConfig> configs)
     {
+        var visible = configs.Where(c => !c.Hidden && !c.Missing).ToList();
+        var showRooms = visible.Select(c => c.Room).Where(r => !string.IsNullOrWhiteSpace(r)).Distinct(StringComparer.CurrentCultureIgnoreCase).Count() > 1;
+
         var existing = Devices.ToDictionary(d => d.Id);
-        var ordered = configs.Select(config =>
+        var ordered = visible.Select(config =>
         {
             if (existing.TryGetValue(config.Id, out var vm))
             {
@@ -134,26 +184,42 @@ public sealed class HomeViewModel : BindableBase
             }
         }
 
+        if (showRooms != _showRooms)
+        {
+            _showRooms = showRooms;
+            foreach (var device in Devices)
+            {
+                device.RefreshSubtitle();
+            }
+        }
+
         RaiseListChanged();
     }
 
     internal void UpdateAccountState()
     {
         HasClient = _account.HasClient;
-        IsSignedIn = _account.IsSignedIn;
+        IsAssistantSignedIn = _account.IsSignedIn;
         OnPropertyChanged(nameof(Summary));
-        if (_isSignedIn && _errorMessage is not null && _errorMessage.Contains("sign in", StringComparison.OrdinalIgnoreCase))
-        {
-            IsErrorOpen = false;
-        }
+        CloseErrorIfConnected();
+    }
+
+    internal void SetGoogleHomeConnected(bool connected)
+    {
+        IsGoogleHomeConnected = connected;
+        OnPropertyChanged(nameof(Summary));
+        CloseErrorIfConnected();
     }
 
     public DeviceViewModel? Find(string id) => Devices.FirstOrDefault(d => d.Id == id);
 
-    /// <summary>Asks the Assistant for the state of every device.</summary>
-    public async Task RefreshStatesAsync()
+    /// <summary>
+    /// Refreshes every device: Google Home devices in one request, Assistant devices one by one
+    /// (only when <paramref name="includeAssistant"/>, as each is a separate Assistant query).
+    /// </summary>
+    public async Task RefreshStatesAsync(bool includeAssistant = true)
     {
-        if (!_isSignedIn || Devices.Count == 0)
+        if (!IsConnected || Devices.Count == 0)
         {
             return;
         }
@@ -164,7 +230,11 @@ public sealed class HomeViewModel : BindableBase
         IsErrorOpen = false;
         try
         {
-            await RunLimitedAsync(Devices.ToList(), d => d.RefreshStateAsync(cts.Token));
+            var batched = Devices.Where(d => BatchReader?.CanReadInBatch(d.Config) == true).ToList();
+            var others = includeAssistant && _assistantSignedIn ? Devices.Except(batched).ToList() : [];
+            await Task.WhenAll(
+                RefreshBatchAsync(batched, showErrors: true, cts.Token),
+                RunLimitedAsync(others, d => d.RefreshStateAsync(cts.Token)));
         }
         finally
         {
@@ -178,6 +248,24 @@ public sealed class HomeViewModel : BindableBase
         }
     }
 
+    /// <summary>Quietly refreshes the Google Home devices (used for polling while the popup is open).</summary>
+    public Task PollStatesAsync()
+    {
+        var batched = Devices.Where(d => BatchReader?.CanReadInBatch(d.Config) == true).ToList();
+        return RefreshBatchAsync(batched, showErrors: false, CancellationToken.None);
+    }
+
+    /// <summary>Toggles a device from its shortcut, reading its current state first if it is old.</summary>
+    public async Task<DeviceCommandResult?> ToggleFromShortcutAsync(DeviceViewModel device)
+    {
+        if (BatchReader?.CanReadInBatch(device.Config) == true && device.IsStale(TimeSpan.FromSeconds(20)))
+        {
+            await RefreshBatchAsync([device], showErrors: false, CancellationToken.None);
+        }
+
+        return await device.ToggleAsync();
+    }
+
     /// <summary>Turns every device off (devices already known to be off are skipped).</summary>
     public Task TurnAllOffAsync() =>
         RunLimitedAsync(Devices.Where(d => d.State != false).ToList(), d => d.SetPowerAsync(false));
@@ -185,7 +273,7 @@ public sealed class HomeViewModel : BindableBase
     internal void OnDeviceStateChanged() => OnPropertyChanged(nameof(Summary));
 
     /// <summary>Smoke test only: show the device list without a Google account.</summary>
-    internal void SimulateSignedIn() => IsSignedIn = true;
+    internal void SimulateSignedIn() => IsGoogleHomeConnected = true;
 
     internal void ReportError(string message)
     {
@@ -203,10 +291,74 @@ public sealed class HomeViewModel : BindableBase
         AuthenticationRequired?.Invoke(this, EventArgs.Empty);
     }
 
+    internal void OnGoogleHomeSignInRequired(string message)
+    {
+        SetGoogleHomeConnected(false);
+        ReportError(message);
+        GoogleHomeSignInRequired?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async Task RefreshBatchAsync(IReadOnlyList<DeviceViewModel> devices, bool showErrors, CancellationToken cancellationToken)
+    {
+        if (devices.Count == 0 || BatchReader is not { } reader || _batchRefreshRunning)
+        {
+            return;
+        }
+
+        _batchRefreshRunning = true;
+        try
+        {
+            var states = await reader.ReadStatesAsync(devices.Select(d => d.Config).ToList(), cancellationToken);
+            foreach (var device in devices)
+            {
+                if (states.TryGetValue(device.Id, out var status))
+                {
+                    device.ApplyStatus(status);
+                }
+            }
+
+            SetGoogleHomeConnected(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (GoogleHomeSignInRequiredException ex)
+        {
+            SetGoogleHomeConnected(false);
+            GoogleHomeSignInRequired?.Invoke(this, EventArgs.Empty);
+            if (showErrors)
+            {
+                ReportError(ex.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Refreshing Google Home states", ex);
+            if (showErrors)
+            {
+                ReportError(ex is GoogleHomeException ? ex.Message : "Couldn't refresh the devices: " + ex.Message);
+            }
+        }
+        finally
+        {
+            _batchRefreshRunning = false;
+        }
+    }
+
+    private void CloseErrorIfConnected()
+    {
+        if (IsConnected && _errorMessage is not null && _errorMessage.Contains("sign in", StringComparison.OrdinalIgnoreCase))
+        {
+            IsErrorOpen = false;
+        }
+    }
+
     private void RaiseListChanged()
     {
         OnPropertyChanged(nameof(HasDevices));
+        OnPropertyChanged(nameof(IsConnected));
         OnPropertyChanged(nameof(NeedsSignIn));
+        OnPropertyChanged(nameof(ShowLoading));
         OnPropertyChanged(nameof(ShowNoDevices));
         OnPropertyChanged(nameof(ShowDevices));
         OnPropertyChanged(nameof(CanRefresh));
@@ -216,6 +368,11 @@ public sealed class HomeViewModel : BindableBase
 
     private static async Task RunLimitedAsync(IReadOnlyList<DeviceViewModel> devices, Func<DeviceViewModel, Task> action)
     {
+        if (devices.Count == 0)
+        {
+            return;
+        }
+
         // Runs on the UI thread; the semaphore just limits how many requests are in flight.
         using var gate = new SemaphoreSlim(MaxParallelRequests);
         await Task.WhenAll(devices.Select(async device =>

@@ -44,7 +44,11 @@
             <controls:ShortcutRecorder x:Name="ShortcutBox" />
         </StackPanel>
 
-        <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Header="Custom commands">
+        <Expander
+            x:Name="CommandsExpander"
+            HorizontalAlignment="Stretch"
+            HorizontalContentAlignment="Stretch"
+            Header="Custom commands">
             <StackPanel Spacing="12">
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"

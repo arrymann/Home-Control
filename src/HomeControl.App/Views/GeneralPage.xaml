@@ -54,7 +54,7 @@
             </toolkit:SettingsCard>
 
             <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Text="Behavior" />
-            <toolkit:SettingsCard Description="Asks Google Assistant about every device each time the popup opens. Slower, but shows changes made elsewhere." Header="Check device states when opening">
+            <toolkit:SettingsCard Description="Google Home devices are always checked. This also asks Google Assistant about each device added by name – slower, one question per device." Header="Check Google Assistant devices when opening">
                 <toolkit:SettingsCard.HeaderIcon>
                     <FontIcon Glyph="&#xE72C;" />
                 </toolkit:SettingsCard.HeaderIcon>
@@ -79,7 +79,7 @@
                     <toolkit:SettingsCard ContentAlignment="Left">
                         <TextBlock
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="Device control uses the Google Assistant API (google.assistant.embedded.v1alpha2). Icons: Fluent UI System Icons, MIT license."
+                            Text="Devices are switched through Google Home on the web (home.google.com) and, optionally, the Google Assistant API (google.assistant.embedded.v1alpha2). Not affiliated with Google. Icons: Fluent UI System Icons, MIT license."
                             TextWrapping="Wrap" />
                     </toolkit:SettingsCard>
                 </toolkit:SettingsExpander.Items>

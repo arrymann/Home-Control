@@ -1,5 +1,7 @@
 using HomeControl.Core.Assistant;
 using HomeControl.Core.Auth;
+using HomeControl.Core.Devices;
+using HomeControl.Core.GoogleHome;
 using HomeControl.Core.Models;
 using HomeControl.Services;
 
@@ -12,10 +14,12 @@ public sealed class DeviceViewModel : BindableBase
     private DeviceConfig _config;
     private bool? _state;
     private bool _isOn;
+    private bool _isOnline = true;
     private bool _isBusy;
     private bool _syncingToggle;
     private string? _busyText;
     private string? _error;
+    private DateTimeOffset _lastUpdated = DateTimeOffset.MinValue;
 
     internal DeviceViewModel(HomeViewModel owner, DeviceConfig config)
     {
@@ -33,7 +37,7 @@ public sealed class DeviceViewModel : BindableBase
 
     public string HotkeyText => _config.Hotkey is { IsValid: true } hotkey ? hotkey.ToString() : string.Empty;
 
-    /// <summary>Last known state; null until the Assistant has told us or we changed it.</summary>
+    /// <summary>Last known state; null until the service has told us or we changed it.</summary>
     public bool? State
     {
         get => _state;
@@ -43,6 +47,19 @@ public sealed class DeviceViewModel : BindableBase
             {
                 OnPropertyChanged(nameof(Subtitle));
                 _owner.OnDeviceStateChanged();
+            }
+        }
+    }
+
+    /// <summary>False when Google Home reports the device as unreachable.</summary>
+    public bool IsOnline
+    {
+        get => _isOnline;
+        private set
+        {
+            if (SetProperty(ref _isOnline, value))
+            {
+                OnPropertyChanged(nameof(Subtitle));
             }
         }
     }
@@ -92,18 +109,23 @@ public sealed class DeviceViewModel : BindableBase
 
     public bool HasError => !string.IsNullOrEmpty(_error);
 
-    /// <summary>Second line of the row: progress, error or state, plus the shortcut.</summary>
+    /// <summary>Second line of the row: room, progress/error/state, and the shortcut.</summary>
     public string Subtitle
     {
         get
         {
             var status = _isBusy ? _busyText
                 : HasError ? _error
+                : !_isOnline ? "Offline"
                 : _state switch { true => "On", false => "Off", null => null };
+            var room = _owner.ShowRooms ? _config.Room : null;
 
-            return string.Join("  ·  ", new[] { status, HotkeyText }.Where(s => !string.IsNullOrEmpty(s)));
+            return string.Join("  ·  ", new[] { room, status, HotkeyText }.Where(s => !string.IsNullOrEmpty(s)));
         }
     }
+
+    /// <summary>True when the state is older than <paramref name="maxAge"/> (or unknown).</summary>
+    internal bool IsStale(TimeSpan maxAge) => DateTimeOffset.UtcNow - _lastUpdated > maxAge;
 
     internal void Update(DeviceConfig config)
     {
@@ -113,6 +135,27 @@ public sealed class DeviceViewModel : BindableBase
         OnPropertyChanged(nameof(Kind));
         OnPropertyChanged(nameof(HotkeyText));
         OnPropertyChanged(nameof(Subtitle));
+    }
+
+    internal void RefreshSubtitle() => OnPropertyChanged(nameof(Subtitle));
+
+    /// <summary>Applies a state read in a batch (ignored while a command is in flight).</summary>
+    internal void ApplyStatus(DeviceStatus status)
+    {
+        if (_isBusy)
+        {
+            return;
+        }
+
+        _lastUpdated = DateTimeOffset.UtcNow;
+        IsOnline = status.Online;
+        if (status.Online && _error is not null)
+        {
+            Error = null;
+        }
+
+        State = status.IsOn;
+        SyncToggle(_state ?? false);
     }
 
     /// <summary>Flips the device (unknown state counts as off). Used by the global shortcut.</summary>
@@ -137,9 +180,16 @@ public sealed class DeviceViewModel : BindableBase
             if (result.Success)
             {
                 State = result.IsOn ?? turnOn;
+                IsOnline = true;
+                _lastUpdated = DateTimeOffset.UtcNow;
             }
             else
             {
+                if (result.IsOn is { } actual)
+                {
+                    State = actual;
+                }
+
                 Error = Shorten(result.Message);
             }
         }
@@ -157,7 +207,7 @@ public sealed class DeviceViewModel : BindableBase
         return result;
     }
 
-    /// <summary>Asks the Assistant whether the device is on.</summary>
+    /// <summary>Asks the device's service whether it is on.</summary>
     public async Task RefreshStateAsync(CancellationToken cancellationToken)
     {
         if (_isBusy)
@@ -174,6 +224,7 @@ public sealed class DeviceViewModel : BindableBase
             if (result.Success)
             {
                 State = result.IsOn;
+                _lastUpdated = DateTimeOffset.UtcNow;
             }
             else
             {
@@ -195,9 +246,10 @@ public sealed class DeviceViewModel : BindableBase
     }
 
     /// <summary>Smoke test only: set a state without contacting Google.</summary>
-    internal void SimulateState(bool isOn)
+    internal void SimulateState(bool isOn, bool online = true)
     {
         State = isOn;
+        IsOnline = online;
         SyncToggle(isOn);
     }
 
@@ -218,6 +270,12 @@ public sealed class DeviceViewModel : BindableBase
     {
         switch (ex)
         {
+            case GoogleHomeSignInRequiredException:
+                _owner.OnGoogleHomeSignInRequired(ex.Message);
+                return "Sign in to Google Home";
+            case GoogleHomeException:
+                _owner.ReportError(ex.Message);
+                return Shorten(ex.Message);
             case AuthenticationRequiredException:
             case AssistantException { IsAuthenticationError: true }:
                 _owner.OnAuthenticationFailed(ex.Message);

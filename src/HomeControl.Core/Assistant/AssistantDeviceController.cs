@@ -1,23 +1,10 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using HomeControl.Core.Devices;
 using HomeControl.Core.Models;
 using HomeControl.Core.Settings;
 
 namespace HomeControl.Core.Assistant;
-
-/// <summary>Outcome of a device command or state query.</summary>
-/// <param name="Success">False when the request failed or the Assistant said it could not do it.</param>
-/// <param name="IsOn">The device state after the call, when known.</param>
-/// <param name="Message">The Assistant's answer or an error description.</param>
-public sealed record DeviceCommandResult(bool Success, bool? IsOn, string Message);
-
-/// <summary>Turns devices on and off and reads their state.</summary>
-public interface IDeviceController
-{
-    Task<DeviceCommandResult> SetPowerAsync(DeviceConfig device, bool turnOn, CancellationToken cancellationToken);
-
-    Task<DeviceCommandResult> QueryPowerAsync(DeviceConfig device, CancellationToken cancellationToken);
-}
 
 /// <summary>
 /// Controls devices through Google Assistant text commands ("turn on Kitchen light") and

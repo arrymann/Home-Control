@@ -2,6 +2,7 @@ using Google.Assistant.Embedded.V1Alpha2;
 using Google.Protobuf;
 using Grpc.Core;
 using HomeControl.Core.Assistant;
+using HomeControl.Core.Devices;
 using HomeControl.Core.Models;
 using HomeControl.Core.Settings;
 using Microsoft.AspNetCore.Builder;

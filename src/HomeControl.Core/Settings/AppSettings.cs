@@ -36,12 +36,37 @@ public sealed class AppSettings
     /// <summary>Show a notification when a device is toggled with its shortcut.</summary>
     public bool NotifyOnHotkey { get; set; } = true;
 
-    /// <summary>Ask the Assistant for every device's state each time the popup opens.</summary>
+    /// <summary>Also ask the Assistant for the state of Assistant devices each time the popup opens.</summary>
     public bool RefreshStatesOnOpen { get; set; }
+
+    public GoogleHomeSettings GoogleHome { get; set; } = new();
 
     public AssistantSettings Assistant { get; set; } = new();
 
+    /// <summary>Retry through Google Assistant when the Google Home session fails.</summary>
+    public bool UseAssistantFallback { get; set; } = true;
+
     public List<DeviceConfig> Devices { get; set; } = [];
+}
+
+/// <summary>Options for the Google Home web session (the home.google.com backend).</summary>
+public sealed class GoogleHomeSettings
+{
+    /// <summary>Public key the home.google.com web app sends with its API requests.</summary>
+    public const string DefaultApiKey = "AIzaSyCMqap8NH88PrhvoBwY1W8ChRUJRjIOJXM";
+
+    /// <summary>The user signed in to Google Home in the app (the session itself lives in WebView2).</summary>
+    public bool Enabled { get; set; }
+
+    public string ApiKey { get; set; } = DefaultApiKey;
+
+    /// <summary>Index of the Google account in the browser session (the "u/0" in home.google.com URLs).</summary>
+    public int AuthUser { get; set; }
+
+    /// <summary>How often device states are refreshed while the tray popup is open.</summary>
+    public int RefreshSeconds { get; set; } = 10;
+
+    public DateTimeOffset? LastSync { get; set; }
 }
 
 /// <summary>Options for talking to the Google Assistant SDK.</summary>

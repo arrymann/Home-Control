@@ -1,8 +1,10 @@
+using HomeControl.Core.GoogleHome;
 using HomeControl.Core.Hotkeys;
 using HomeControl.Core.Models;
 using HomeControl.Core.Settings;
 using HomeControl.Helpers;
 using HomeControl.Interop;
+using HomeControl.Services;
 using HomeControl.Views;
 using Microsoft.UI.Xaml;
 
@@ -10,9 +12,11 @@ namespace HomeControl;
 
 /// <summary>
 /// <c>HomeControl.exe --smoke-test result.txt [screenshot folder]</c>: opens the flyout
-/// (with sample devices) in light and dark theme, every settings page and the device dialog,
-/// then writes "OK" or the errors to the result file and exits. CI runs it to catch XAML
-/// problems that only show up at runtime. Nothing is saved to the user's settings.
+/// (with sample devices) in light and dark theme, every settings page, the device dialog and
+/// the Google sign-in window, runs a script in the hidden Google Home page and tries a sync
+/// (which must fail cleanly without a sign-in), then writes "OK" or the errors to the result
+/// file and exits. CI runs it to catch XAML and WebView2 problems that only show up at
+/// runtime. Nothing is saved to the user's settings.
 /// </summary>
 internal static class SmokeTest
 {
@@ -46,14 +50,37 @@ internal static class SmokeTest
         }
 
         var kinds = Enum.GetValues<DeviceKind>();
-        host.Settings.Devices.AddRange(kinds.Take(6).Select((kind, i) => new DeviceConfig
+        Hotkey Shortcut(int n) => new(HotkeyModifiers.Control | HotkeyModifiers.Alt, '0' + n);
+        DeviceConfig FromGoogleHome(string name, string room, DeviceKind kind, Hotkey? hotkey = null, bool hidden = false) => new()
         {
-            Name = $"{Ui.KindName(kind).Split(' ')[0]} {i + 1}",
+            Source = DeviceSource.GoogleHome,
+            GoogleHomeId = Guid.NewGuid().ToString(),
+            Name = name,
+            Room = room,
             Kind = kind,
-            Hotkey = i < 3 ? new Hotkey(HotkeyModifiers.Control | HotkeyModifiers.Alt, '1' + i) : null,
-        }));
+            Hotkey = hotkey,
+            Hidden = hidden,
+        };
+
+        // A typical home: outlets, a light and a TV in two rooms, one device hidden,
+        // plus a scene added by name for Google Assistant.
+        List<DeviceConfig> samples =
+        [
+            FromGoogleHome("3d printer", "Living Room", DeviceKind.Outlet, Shortcut(1)),
+            FromGoogleHome("Backlight", "Living Room", DeviceKind.Light, Shortcut(2)),
+            FromGoogleHome("Desk", "Office", DeviceKind.Outlet),
+            FromGoogleHome("Pc", "Office", DeviceKind.Switch),
+            FromGoogleHome("Living Room TV", "Living Room", DeviceKind.Tv),
+            FromGoogleHome("Hallway", "Hallway", DeviceKind.Light, hidden: true),
+            new DeviceConfig { Name = "Movie night", Kind = DeviceKind.Scene, Hotkey = Shortcut(3) },
+        ];
+        host.Settings.Devices.AddRange(samples);
         host.Home.LoadDevices(host.Settings.Devices);
         host.Home.SimulateSignedIn();
+        if (host.Home.Devices.Count != host.Settings.Devices.Count(d => !d.Hidden && !d.Missing))
+        {
+            errors.Add($"Hidden devices: the popup shows {host.Home.Devices.Count} devices.");
+        }
 
         foreach (var kind in kinds)
         {
@@ -75,7 +102,10 @@ internal static class SmokeTest
             SetTheme(ThemePreference.Light);
             host.ShowPopup();
             host.Home.Devices[0].SimulateState(true);
+            host.Home.Devices[1].SimulateState(false);
             host.Home.Devices[2].SimulateState(false);
+            host.Home.Devices[3].SimulateState(true);
+            host.Home.Devices[4].SimulateState(false, online: false);
         }, () => host.PopupWindowHandle, waitMs: 2500);
         await Step("flyout dark", () => SetTheme(ThemePreference.Dark), () => host.PopupWindowHandle);
 
@@ -88,24 +118,80 @@ internal static class SmokeTest
         await Step("settings general light", () => host.OpenSettings("general"), () => host.SettingsWindowHandle);
 
         DeviceEditorDialog? dialog = null;
-        await Step("device dialog", () =>
+        foreach (var (name, device) in new[] { ("device dialog", samples[0]), ("device dialog assistant", samples[^1]) })
         {
-            dialog = new DeviceEditorDialog(host.Settings.Devices[0])
+            await Step(name, () =>
             {
-                XamlRoot = host.SettingsXamlRoot,
-                RequestedTheme = host.EffectiveTheme,
-            };
-            _ = dialog.ShowAsync();
-        }, () => host.SettingsWindowHandle);
-        await Step("close device dialog", () => dialog?.Hide(), waitMs: 500);
+                dialog = new DeviceEditorDialog(device)
+                {
+                    XamlRoot = host.SettingsXamlRoot,
+                    RequestedTheme = host.EffectiveTheme,
+                };
+                _ = dialog.ShowAsync();
+            }, () => host.SettingsWindowHandle);
+            await Step($"close {name}", () => dialog?.Hide(), waitMs: 500);
+        }
+
+        // Google Home: the sign-in window, a script in the hidden page, and a sync without a session.
+        await Step("google sign-in", host.OpenGoogleSignIn, () => host.SignInWindowHandle, waitMs: 6000);
+        await Step("close google sign-in", host.CloseGoogleSignIn, waitMs: 500);
+        await RunGoogleHomeChecksAsync(host, errors);
+        await Step("flyout signed out", host.ShowPopup, () => host.PopupWindowHandle, waitMs: 2000);
 
         try
+        {
+            await File.WriteAllTextAsync        try
         {
             await File.WriteAllTextAsync(resultPath, errors.Count == 0 ? "OK" : string.Join(Environment.NewLine, errors));
         }
         finally
         {
             host.Exit();
+        }
+    }
+
+    private static async Task RunGoogleHomeChecksAsync(AppHost host, List<string> errors)
+    {
+        try
+        {
+            var result = await host.GoogleHomeSession.EvaluateForTestAsync("(async () => 1 + 1)()").WaitAsync(TimeSpan.FromSeconds(60));
+            if (result != "2")
+            {
+                errors.Add($"WebView2: the test script returned {result} instead of 2.");
+            }
+        }
+        catch (GoogleHomeException ex) when (host.GoogleHomeState == GoogleHomeConnection.Unavailable)
+        {
+            Log.Info("Smoke test: no WebView2 Runtime, skipping the Google Home checks. " + ex.Message);
+            return;
+        }
+        catch (Exception ex)
+        {
+            errors.Add("WebView2 script: " + ex);
+            return;
+        }
+
+        try
+        {
+            var result = await host.SyncGoogleHomeAsync().WaitAsync(TimeSpan.FromSeconds(90));
+            Log.Info($"Smoke test: Google Home sync worked ({result}); this PC is signed in.");
+        }
+        catch (GoogleHomeSignInRequiredException)
+        {
+            // Expected without a Google sign-in: the app must now know it is signed out.
+            if (host.Home.IsGoogleHomeConnected)
+            {
+                errors.Add("Google Home: still shown as connected after a signed-out sync.");
+            }
+        }
+        catch (GoogleHomeException ex)
+        {
+            // No connection to Google from this machine: not a failure of the app.
+            Log.Info("Smoke test: Google Home sync failed: " + ex.Message);
+        }
+        catch (Exception ex)
+        {
+            errors.Add("Google Home sync: " + ex);
         }
     }
 }

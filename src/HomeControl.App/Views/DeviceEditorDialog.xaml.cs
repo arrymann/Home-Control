@@ -1,4 +1,4 @@
-using HomeControl.Core.Assistant;
+using HomeControl.Core.Devices;
 using HomeControl.Core.Models;
 using HomeControl.Helpers;
 using Microsoft.UI.Xaml;
@@ -45,6 +45,18 @@ public sealed partial class DeviceEditorDialog : ContentDialog
         OnCommandBox.PlaceholderText = assistant.OnCommandTemplate;
         OffCommandBox.PlaceholderText = assistant.OffCommandTemplate;
         StateQueryBox.PlaceholderText = assistant.StateQueryTemplate;
+
+        if (_device.IsGoogleHome)
+        {
+            // The name comes from Google Home (rename the device there); it is switched directly.
+            NameBox.IsReadOnly = true;
+            NameBox.Description = string.IsNullOrWhiteSpace(_device.Room) ? null : $"Room: {_device.Room}";
+            CommandsExpander.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            NameBox.Header = "Name in Google Home (as Google Assistant knows it)";
+        }
 
         UpdateTestButtons();
     }
@@ -101,10 +113,13 @@ public sealed partial class DeviceEditorDialog : ContentDialog
         {
             var result = await test(App.Host.Controller, device);
             var state = result.IsOn switch { true => "on", false => "off", null => "unknown" };
-            TestResult.Text = (result.Success, isQuery) switch
+            TestResult.Text = (result.Success, isQuery, device.IsGoogleHome) switch
             {
-                (false, _) => $"Didn't work. Google Assistant said: “{result.Message}”",
-                (true, true) => $"State: {state}. Google Assistant said: “{result.Message}”",
+                (false, _, true) => $"Didn't work: {result.Message}",
+                (false, _, false) => $"Didn't work. Google Assistant said: “{result.Message}”",
+                (true, true, true) => $"The device is {state}.",
+                (true, true, false) => $"State: {state}. Google Assistant said: “{result.Message}”",
+                (true, false, true) => result.Message,
                 _ => $"Done. Google Assistant said: “{result.Message}”",
             };
         }
@@ -124,11 +139,13 @@ public sealed partial class DeviceEditorDialog : ContentDialog
         TestOnButton.IsEnabled = TestOffButton.IsEnabled = TestStateButton.IsEnabled = !testing && CanTest;
         if (testing)
         {
-            TestResult.Text = "Asking Google Assistant…";
+            TestResult.Text = _device.IsGoogleHome ? "Asking Google Home…" : "Asking Google Assistant…";
         }
     }
 
-    private bool CanTest => App.Host.Account.IsSignedIn && !string.IsNullOrWhiteSpace(NameBox.Text);
+    private bool IsServiceReady => _device.IsGoogleHome ? App.Host.Settings.GoogleHome.Enabled : App.Host.Account.IsSignedIn;
+
+    private bool CanTest => IsServiceReady && !string.IsNullOrWhiteSpace(NameBox.Text);
 
     private void UpdateTestButtons()
     {
@@ -138,9 +155,11 @@ public sealed partial class DeviceEditorDialog : ContentDialog
         }
 
         TestOnButton.IsEnabled = TestOffButton.IsEnabled = TestStateButton.IsEnabled = CanTest;
-        if (!App.Host.Account.IsSignedIn)
+        if (!IsServiceReady)
         {
-            TestResult.Text = "Sign in on the Account page to try commands.";
+            TestResult.Text = _device.IsGoogleHome
+                ? "Sign in to Google Home on the Account page to try it."
+                : "Sign in to Google Assistant on the Account page to try commands.";
         }
     }
 

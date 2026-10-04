@@ -33,7 +33,7 @@ public partial class App : Application
         var smokeTest = Array.FindIndex(arguments, a => a.Equals(SmokeTest.Argument, StringComparison.OrdinalIgnoreCase));
         var background = smokeTest >= 0 || arguments.Contains(StartupService.BackgroundArgument, StringComparer.OrdinalIgnoreCase);
 
-        Host = new AppHost();
+        Host = new AppHost { IsSmokeTest = smokeTest >= 0 };
         Host.Start(background);
 
         if (smokeTest >= 0)

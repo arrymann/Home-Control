@@ -18,6 +18,7 @@ public sealed partial class AccountPage : Page
     ];
 
     private CancellationTokenSource? _signInCts;
+    private string? _syncSummary;
     private bool _loading;
 
     public AccountPage()
@@ -33,6 +34,7 @@ public sealed partial class AccountPage : Page
     {
         base.OnNavigatedTo(e);
         Account.StateChanged += OnAccountStateChanged;
+        App.Host.GoogleHomeChanged += OnGoogleHomeChanged;
         Load();
     }
 
@@ -40,10 +42,13 @@ public sealed partial class AccountPage : Page
     {
         base.OnNavigatedFrom(e);
         Account.StateChanged -= OnAccountStateChanged;
+        App.Host.GoogleHomeChanged -= OnGoogleHomeChanged;
         _signInCts?.Cancel();
     }
 
     private void OnAccountStateChanged(object? sender, EventArgs e) => DispatcherQueue.TryEnqueue(UpdateStatus);
+
+    private void OnGoogleHomeChanged(object? sender, EventArgs e) => DispatcherQueue.TryEnqueue(UpdateGoogleHomeStatus);
 
     private void Load()
     {
@@ -51,7 +56,12 @@ public sealed partial class AccountPage : Page
         var client = Account.Client;
         ClientIdBox.Text = client?.ClientId ?? string.Empty;
         ClientSecretBox.Password = client?.ClientSecret ?? string.Empty;
-        ClientExpander.IsExpanded = client is null;
+
+        var googleHome = App.Host.Settings.GoogleHome;
+        AuthUserBox.Value = googleHome.AuthUser;
+        RefreshSecondsBox.Value = googleHome.RefreshSeconds;
+        FallbackSwitch.IsOn = App.Host.Settings.UseAssistantFallback;
+        UpdateGoogleHomeStatus();
 
         var languages = Languages.ToList();
         if (!languages.Contains(Assistant.LanguageCode, StringComparer.OrdinalIgnoreCase))
@@ -93,6 +103,119 @@ public sealed partial class AccountPage : Page
         CancelSignInButton.Visibility = signingIn ? Visibility.Visible : Visibility.Collapsed;
         SignInProgress.IsActive = signingIn;
         TestButton.IsEnabled = Account.IsSignedIn;
+    }
+
+    private void UpdateGoogleHomeStatus()
+    {
+        var host = App.Host;
+        var settings = host.Settings.GoogleHome;
+        var state = host.GoogleHomeState;
+        var syncing = host.IsSyncingGoogleHome;
+        var signedOut = !settings.Enabled || state == GoogleHomeConnection.SignedOut;
+
+        var count = host.Settings.Devices.Count(d => d.IsGoogleHome && !d.Missing);
+        var devices = count == 1 ? "1 device" : $"{count} devices";
+        var synced = settings.LastSync is { } lastSync ? $"  ·  synced {lastSync.ToLocalTime():g}" : string.Empty;
+
+        GoogleHomeCard.Description = state switch
+        {
+            _ when syncing => "Loading your devices from Google Home…",
+            GoogleHomeConnection.Unavailable => "Google Home needs the Microsoft Edge WebView2 Runtime.",
+            _ when !settings.Enabled => "Not signed in. Sign in with the Google account that has your home.",
+            GoogleHomeConnection.SignedOut => "Google ended the session. Sign in again.",
+            GoogleHomeConnection.Error => $"Signed in, but the last request failed  ·  {devices}{synced}",
+            _ => $"Signed in  ·  {devices}{synced}",
+        };
+
+        GoogleHomeSignInButton.Visibility = signedOut ? Visibility.Visible : Visibility.Collapsed;
+        GoogleHomeSyncButton.Visibility = signedOut ? Visibility.Collapsed : Visibility.Visible;
+        GoogleHomeSyncButton.IsEnabled = !syncing;
+        GoogleHomeSignOutButton.Visibility = settings.Enabled ? Visibility.Visible : Visibility.Collapsed;
+        GoogleHomeProgress.IsActive = syncing;
+
+        if (host.GoogleHomeMessage is { } problem)
+        {
+            GoogleHomeError.Severity = InfoBarSeverity.Warning;
+            GoogleHomeError.Title = "Google Home";
+            GoogleHomeError.Message = problem;
+            GoogleHomeError.IsOpen = true;
+        }
+        else if (_syncSummary is { } summary)
+        {
+            GoogleHomeError.Severity = InfoBarSeverity.Success;
+            GoogleHomeError.Title = "Synced";
+            GoogleHomeError.Message = summary;
+            GoogleHomeError.IsOpen = true;
+        }
+        else
+        {
+            GoogleHomeError.IsOpen = false;
+        }
+    }
+
+    private void OnGoogleHomeSignInClick(object sender, RoutedEventArgs e) => App.Host.OpenGoogleSignIn();
+
+    private async void OnGoogleHomeSyncClick(object sender, RoutedEventArgs e)
+    {
+        _syncSummary = null;
+        try
+        {
+            var result = await App.Host.SyncGoogleHomeAsync();
+            _syncSummary = result.ToString();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Syncing Google Home", ex);
+        }
+
+        UpdateGoogleHomeStatus();
+    }
+
+    private async void OnGoogleHomeSignOutClick(object sender, RoutedEventArgs e)
+    {
+        _syncSummary = null;
+        GoogleHomeSignOutButton.IsEnabled = false;
+        try
+        {
+            await App.Host.SignOutGoogleHomeAsync();
+        }
+        finally
+        {
+            GoogleHomeSignOutButton.IsEnabled = true;
+            UpdateGoogleHomeStatus();
+        }
+    }
+
+    private void OnGoogleHomeOptionChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_loading || double.IsNaN(sender.Value))
+        {
+            return;
+        }
+
+        var settings = App.Host.Settings.GoogleHome;
+        if (!double.IsNaN(AuthUserBox.Value))
+        {
+            settings.AuthUser = (int)Math.Clamp(AuthUserBox.Value, 0, 9);
+        }
+
+        if (!double.IsNaN(RefreshSecondsBox.Value))
+        {
+            settings.RefreshSeconds = (int)Math.Clamp(RefreshSecondsBox.Value, 3, 300);
+        }
+
+        App.Host.SaveSettings();
+    }
+
+    private void OnFallbackToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading || FallbackSwitch.IsOn == App.Host.Settings.UseAssistantFallback)
+        {
+            return;
+        }
+
+        App.Host.Settings.UseAssistantFallback = FallbackSwitch.IsOn;
+        App.Host.SaveSettings();
     }
 
     private async void OnImportClick(object sender, RoutedEventArgs e)

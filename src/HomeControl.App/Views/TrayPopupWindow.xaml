@@ -62,21 +62,42 @@
                 <TextBlock
                     HorizontalAlignment="Center"
                     Style="{StaticResource BodyStrongTextBlockStyle}"
-                    Text="Connect your Google account" />
+                    Text="Connect Google Home" />
                 <TextBlock
                     HorizontalAlignment="Center"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Sign in once to control the devices in your Google Home."
+                    Text="Sign in with your Google account once to control the devices in your home."
                     TextAlignment="Center"
                     TextWrapping="Wrap" />
                 <Button
                     HorizontalAlignment="Center"
                     Click="OnSignInClick"
-                    Content="Set up"
+                    Content="Sign in"
                     Style="{StaticResource AccentButtonStyle}" />
+                <HyperlinkButton
+                    HorizontalAlignment="Center"
+                    Click="OnMoreOptionsClick"
+                    Content="Other options" />
             </StackPanel>
 
-            <!-- Signed in, nothing added yet -->
+            <!-- Loading the devices from Google Home for the first time -->
+            <StackPanel
+                Grid.Row="2"
+                Margin="24,12,24,24"
+                HorizontalAlignment="Center"
+                Spacing="12"
+                Visibility="{x:Bind helpers:Ui.Visible(ViewModel.ShowLoading), Mode=OneWay}">
+                <ProgressRing
+                    Width="32"
+                    Height="32"
+                    IsActive="{x:Bind ViewModel.ShowLoading, Mode=OneWay}" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="Loading your devices from Google Home…" />
+            </StackPanel>
+
+            <!-- Connected, nothing to show -->
             <StackPanel
                 Grid.Row="2"
                 Margin="24,12,24,24"
@@ -94,13 +115,13 @@
                 <TextBlock
                     HorizontalAlignment="Center"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Add the lights, plugs and switches you want to control from here."
+                    Text="Lights, plugs and switches from Google Home show up here. Sync them or pick which ones to show in Settings."
                     TextAlignment="Center"
                     TextWrapping="Wrap" />
                 <Button
                     HorizontalAlignment="Center"
                     Click="OnAddDevicesClick"
-                    Content="Add devices"
+                    Content="Manage devices"
                     Style="{StaticResource AccentButtonStyle}" />
             </StackPanel>
 
@@ -134,7 +155,11 @@
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
 
-                                <Grid Width="36" Height="36" VerticalAlignment="Center">
+                                <Grid
+                                    Width="36"
+                                    Height="36"
+                                    VerticalAlignment="Center"
+                                    Opacity="{x:Bind helpers:Ui.OnlineOpacity(IsOnline), Mode=OneWay}">
                                     <Ellipse Fill="{ThemeResource ControlAltFillColorTertiaryBrush}" />
                                     <Ellipse Fill="{ThemeResource AccentFillColorDefaultBrush}" Visibility="{x:Bind helpers:Ui.Visible(IsOn), Mode=OneWay}" />
                                     <Viewbox
@@ -153,6 +178,7 @@
 
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                     <TextBlock
+                                        Opacity="{x:Bind helpers:Ui.OnlineOpacity(IsOnline), Mode=OneWay}"
                                         Style="{StaticResource BodyTextBlockStyle}"
                                         Text="{x:Bind Label, Mode=OneWay}"
                                         TextTrimming="CharacterEllipsis"

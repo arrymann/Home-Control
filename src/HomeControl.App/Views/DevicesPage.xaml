@@ -25,17 +25,17 @@
             <TextBlock
                 Margin="0,0,0,16"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Text="Home Control switches devices through Google Assistant, the same way as saying “Hey Google, turn on the kitchen light”. Add each device with the name it has in the Google Home app."
+                Text="Devices that can be turned on and off come from your Google Home. Choose which ones show in the tray, and give them a label, an icon and a shortcut."
                 TextWrapping="Wrap" />
 
             <InfoBar
                 x:Name="SignInInfo"
-                Title="Not signed in"
+                Title="Not connected"
                 IsClosable="False"
-                Message="Connect your Google account so Home Control can switch these devices."
+                Message="Sign in to Google Home so Home Control can load and switch your devices."
                 Severity="Informational">
                 <InfoBar.ActionButton>
-                    <Button Click="OnGoToAccountClick" Content="Go to Account" />
+                    <Button Click="OnSignInClick" Content="Sign in" />
                 </InfoBar.ActionButton>
             </InfoBar>
             <InfoBar
@@ -43,10 +43,27 @@
                 Title="Some shortcuts don't work"
                 Severity="Warning" />
 
+            <toolkit:SettingsCard x:Name="SyncCard" Header="Google Home">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE80F;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ProgressRing
+                        x:Name="SyncProgress"
+                        Width="16"
+                        Height="16"
+                        IsActive="False" />
+                    <Button
+                        x:Name="SyncButton"
+                        Click="OnSyncClick"
+                        Content="Sync now" />
+                </StackPanel>
+            </toolkit:SettingsCard>
+
             <toolkit:SettingsCard
                 Click="OnAddClick"
-                Description="Lights, plugs, switches, TVs, scenes – anything Google Home can turn on and off."
-                Header="Add a device"
+                Description="For scenes, or devices Google Home on the web can't switch. Uses Google Assistant (set it up on the Account page)."
+                Header="Add a device by name"
                 IsClickEnabled="True">
                 <toolkit:SettingsCard.HeaderIcon>
                     <FontIcon Glyph="&#xE710;" />
@@ -70,6 +87,15 @@
                                 <PathIcon Data="{x:Bind helpers:Ui.DeviceIcon(Kind)}" />
                             </toolkit:SettingsCard.HeaderIcon>
                             <StackPanel Orientation="Horizontal" Spacing="2">
+                                <ToggleSwitch
+                                    MinWidth="0"
+                                    Margin="0,0,8,0"
+                                    AutomationProperties.Name="Show in the tray"
+                                    IsOn="{x:Bind ShowInTray}"
+                                    OffContent=""
+                                    OnContent=""
+                                    Toggled="OnShowInTrayToggled"
+                                    ToolTipService.ToolTip="Show in the tray" />
                                 <Button
                                     AutomationProperties.Name="Move up"
                                     Click="OnMoveUpClick"
@@ -96,8 +122,9 @@
                                 <Button
                                     AutomationProperties.Name="Remove"
                                     Click="OnRemoveClick"
+                                    IsEnabled="{x:Bind CanRemove}"
                                     Style="{StaticResource IconButtonStyle}"
-                                    ToolTipService.ToolTip="Remove">
+                                    ToolTipService.ToolTip="{x:Bind RemoveToolTip}">
                                     <FontIcon FontSize="14" Glyph="&#xE74D;" />
                                 </Button>
                             </StackPanel>

@@ -11,17 +11,40 @@ A small WinUI 3 tray app for switching your Google Home devices on and off.
 
 ## How it talks to Google Home
 
-Google's [Home APIs](https://developers.home.google.com/apis) only ship SDKs for Android and iOS. There is no Windows or REST version. The only Google API a Windows app can use to switch *any* device in your Google Home is the **Google Assistant API** (`embeddedassistant.googleapis.com`). Home Control sends it the same text commands you would say to a speaker, such as "turn on Kitchen light". It then reads the answers ("The kitchen light is on.") to work out device state. Home Assistant's *Google Assistant SDK* integration uses the same approach.
+Google's [Home APIs](https://developers.home.google.com/apis) only ship SDKs for Android and iOS. Its [Home MCP server](https://developers.home.google.com/) needs a US Google Home Premium Advanced subscription. So Home Control uses two other routes:
 
-What this means in practice:
+### Google Home on the web (default)
 
-- You add devices by their **name in the Google Home app**. The API can't list your devices.
-- Device state is known after you switch a device, or after **Refresh** (which asks "is Kitchen light on?"). Changes made elsewhere show up on the next refresh. You can also turn on *Check device states when opening*.
-- Google is replacing Google Assistant with Gemini on phones (September 2026). The cloud Assistant API used here still works. If Google retires it, the device layer (`IDeviceController`) is the only part that needs replacing.
+Home Control signs in to [home.google.com](https://home.google.com) once, in a small browser window inside the app (Microsoft Edge WebView2). After that it keeps that page loaded in a hidden browser and sends the same requests the web app sends. Those requests go to Google's `googlehomefoyer-pa` API and are authorized from the page's own session.
 
-## Setting up Google access (once, about 5 minutes)
+- **Devices are listed automatically.** Every device that can be turned on and off (lights, plugs, switches, TVs and so on) is added, with its room. Devices added later in Google Home appear at the next start or after **Sync now**.
+- **State is live.** The flyout reads every device's state in one request when it opens, and again every 10 seconds while it stays open. Offline devices are shown faded.
+- **Your sign-in stays on this PC,** in a private browser profile for this app only: `%LOCALAPPDATA%\HomeControl\WebView2`. **Sign out** clears it.
 
-Google requires your own free OAuth client for the Assistant API. The Account page in the app walks you through these steps with links:
+The catch: this is the private interface of Google's own website, not an API Google offers to other apps. It can stop working whenever Google changes the site. Google may also refuse to sign in inside an embedded browser ("This browser or app may not be secure"). Use it for your own home only. If it breaks, Google Assistant (below) can take over.
+
+### Google Assistant (optional fallback)
+
+The **Google Assistant API** (`embeddedassistant.googleapis.com`) is an official API that Windows apps can use. Home Control sends it the same text commands you would say to a speaker, such as "turn on Kitchen light", and reads the answers to work out device state. Home Assistant's *Google Assistant SDK* integration works the same way.
+
+When Assistant is set up, Home Control:
+
+- **switches a Google Home device through Assistant, by name,** when the web session fails (this can be turned off);
+- **lets you add devices or scenes by name,** for example `activate movie night`.
+
+Google is replacing Google Assistant with Gemini on phones. The cloud Assistant API used here still works.
+
+## Setting up
+
+### Google Home (about 1 minute)
+
+Open **Settings › Account** and click **Sign in** under *Google Home*, or click **Sign in** in the flyout. Sign in with the Google account that has your home. When home.google.com loads, the devices are imported, and you can close the window. Use **Settings › Devices** to hide devices from the tray, rename them, change their icons and add shortcuts.
+
+If several Google accounts are signed in and the wrong home shows up, set **Account index** under *Advanced* (`0` is the first account, `1` the second, …).
+
+### Google Assistant (optional, about 5 minutes)
+
+Google requires your own free OAuth client for the Assistant API. The Account page walks you through these steps, with links:
 
 1. [Create a Google Cloud project](https://console.cloud.google.com/projectcreate).
 2. Enable the [Google Assistant API](https://console.cloud.google.com/apis/library/embeddedassistant.googleapis.com) in it.
@@ -35,7 +58,7 @@ Sign-in uses the standard installed-app OAuth flow: your browser, a loopback red
 
 ## Building
 
-Requirements: Windows 10 1809 or later (Mica needs Windows 11), the .NET 10 SDK, and optionally Visual Studio 2022/2026 with the *WinUI application development* workload.
+Requirements: Windows 10 1809 or later (Mica needs Windows 11), the .NET 10 SDK, and optionally Visual Studio 2022/2026 with the *WinUI application development* workload. Running it needs the Microsoft Edge WebView2 Runtime, which Windows 11 and up-to-date Windows 10 already include.
 
 ```powershell
 # run from source
@@ -46,9 +69,9 @@ dotnet build src/HomeControl.App -p:Platform=x64
 dotnet publish src/HomeControl.App -c Release -p:Platform=x64 -r win-x64 --self-contained -o publish
 ```
 
-Use `-p:Platform=ARM64 -r win-arm64` for ARM devices. Every push also builds both architectures on GitHub Actions and attaches the published app to the run as an artifact. CI also launches the x64 build with `--smoke-test`, which opens the flyout and every settings page in light and dark theme, fails on any runtime error, and uploads screenshots (the *Screenshots* artifact).
+Use `-p:Platform=ARM64 -r win-arm64` for ARM devices. Every push also builds both architectures on GitHub Actions and attaches the published app to the run as an artifact. CI also launches the x64 build with `--smoke-test`. It opens the flyout and every settings page in light and dark theme, plus the Google sign-in window. It runs a script in the hidden Google Home page and checks that a sync without a sign-in fails cleanly. It fails on any runtime error and uploads screenshots (the *Screenshots* artifact).
 
-The core library (Google sign-in, Assistant client, settings, shortcuts) is cross-platform and has unit tests:
+The core library is cross-platform and has unit tests. It holds the Google Home protocol and device sync, the Assistant client, Google sign-in, settings and shortcuts.
 
 ```bash
 dotnet test tests/HomeControl.Core.Tests
@@ -59,26 +82,29 @@ dotnet test tests/HomeControl.Core.Tests
 | | |
 |---|---|
 | Left-click tray icon | Open or close the device flyout (Esc or clicking elsewhere closes it) |
-| Right-click tray icon | Refresh device states, Turn all off, Settings, Exit |
+| Right-click tray icon | Refresh device states, Turn all off, Sync devices, Settings, Exit |
 | Device shortcut | Toggles that device; a notification confirms it (can be turned off) |
-| Settings › Devices | Add, edit, reorder and remove devices; record shortcuts; **Try it** buttons |
-| Settings › Account | OAuth client, sign in/out, test the connection, language and command phrases |
+| Settings › Devices | Sync from Google Home, show or hide devices in the tray, rename, reorder, record shortcuts, **Try it** buttons; add Assistant devices by name |
+| Settings › Account | Google Home sign-in and sync; Google Assistant setup, fallback, language and command phrases |
 | Settings › General | Theme, window material, flyout shortcut, notifications, start with Windows |
 
 Starting `HomeControl.exe` a second time opens the flyout of the running instance. With `--background` (used by *Start with Windows*) it starts silently in the tray.
 
-### Other languages and special devices
+### Assistant: other languages and special devices
 
-Commands are built from templates (`turn on {name}`, `turn off {name}`, `is {name} on?`). Answers are interpreted with regular expressions. All of these can be changed under **Settings › Account › Language and commands**, so Home Control works with any Assistant language. Each device can also override its phrases, for example `activate movie night` for a scene.
+Assistant commands are built from templates (`turn on {name}`, `turn off {name}`, `is {name} on?`). Answers are interpreted with regular expressions. All of these can be changed under **Settings › Account › Language and commands**, so Home Control works with any Assistant language. Each device can also override its phrases, for example `activate movie night` for a scene.
 
 Settings live in `%LOCALAPPDATA%\HomeControl\settings.json`, next to a log file (`home-control.log`).
 
 ## Project layout
 
 ```
-src/HomeControl.Core         Cross-platform logic: OAuth (loopback + PKCE), Assistant gRPC client,
-                             device controller, settings and secret store, shortcut model
-src/HomeControl.App          WinUI 3 app: Win32 tray icon and hotkeys, flyout, settings window
-tests/HomeControl.Core.Tests xUnit tests, including an in-process fake Assistant gRPC server
+src/HomeControl.Core         Cross-platform logic: Google Home protocol, device sync and routing,
+                             OAuth (loopback + PKCE), Assistant gRPC client, settings and secret
+                             store, shortcut model
+src/HomeControl.App          WinUI 3 app: Win32 tray icon and hotkeys, flyout, settings window,
+                             the WebView2 Google Home session and sign-in window
+tests/HomeControl.Core.Tests xUnit tests, including sample Google Home responses and an
+                             in-process fake Assistant gRPC server
 tools/generate_assets.py     Regenerates the icons from Fluent UI System Icons
 ```

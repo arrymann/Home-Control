@@ -80,6 +80,10 @@ public sealed class SettingsStore
     private static void Normalize(AppSettings settings)
     {
         settings.Assistant ??= new AssistantSettings();
+        settings.GoogleHome ??= new GoogleHomeSettings();
+        if (string.IsNullOrWhiteSpace(settings.GoogleHome.ApiKey)) settings.GoogleHome.ApiKey = GoogleHomeSettings.DefaultApiKey;
+        if (settings.GoogleHome.AuthUser < 0) settings.GoogleHome.AuthUser = 0;
+        settings.GoogleHome.RefreshSeconds = Math.Clamp(settings.GoogleHome.RefreshSeconds, 3, 300);
         settings.Devices ??= [];
         settings.Devices.RemoveAll(d => d is null);
 

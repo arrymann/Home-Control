@@ -19,6 +19,9 @@ public static class Ui
 
     public static bool Not(bool value) => !value;
 
+    /// <summary>Unreachable devices are drawn faded.</summary>
+    public static double OnlineOpacity(bool online) => online ? 1.0 : 0.5;
+
     /// <summary>A new geometry for a device icon (geometries cannot be shared between elements).</summary>
     public static Geometry DeviceGeometry(DeviceKind kind, bool filled) => CreateGeometry(DeviceIconData.Get(kind, filled));
 

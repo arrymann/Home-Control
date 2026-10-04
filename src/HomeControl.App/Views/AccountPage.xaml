@@ -17,8 +17,88 @@
             <TextBlock
                 Margin="0,0,0,16"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Text="Google's Home APIs are only available to Android and iOS apps, so Home Control talks to your Google Home through the Google Assistant API. Google requires your own (free) Google Cloud OAuth client for that – it takes about five minutes to set up once."
+                Text="Home Control switches your devices the way Google Home on the web (home.google.com) does, signed in with your Google account. Google Assistant can be set up as well, as a fallback and for scenes."
                 TextWrapping="Wrap" />
+
+            <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Text="Google Home" />
+
+            <toolkit:SettingsCard x:Name="GoogleHomeCard" Header="Google account">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE80F;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ProgressRing
+                        x:Name="GoogleHomeProgress"
+                        Width="16"
+                        Height="16"
+                        IsActive="False" />
+                    <Button
+                        x:Name="GoogleHomeSignInButton"
+                        Click="OnGoogleHomeSignInClick"
+                        Content="Sign in"
+                        Style="{StaticResource AccentButtonStyle}" />
+                    <Button
+                        x:Name="GoogleHomeSyncButton"
+                        Click="OnGoogleHomeSyncClick"
+                        Content="Sync devices" />
+                    <Button
+                        x:Name="GoogleHomeSignOutButton"
+                        Click="OnGoogleHomeSignOutClick"
+                        Content="Sign out" />
+                </StackPanel>
+            </toolkit:SettingsCard>
+            <InfoBar
+                x:Name="GoogleHomeError"
+                Title="Google Home"
+                Severity="Warning" />
+
+            <toolkit:SettingsExpander Description="Only needed when several Google accounts are signed in, or to change how often the popup refreshes." Header="Advanced">
+                <toolkit:SettingsExpander.HeaderIcon>
+                    <FontIcon Glyph="&#xE9E9;" />
+                </toolkit:SettingsExpander.HeaderIcon>
+                <toolkit:SettingsExpander.Items>
+                    <toolkit:SettingsCard Description="0 for the first signed-in Google account, 1 for the second, and so on (the number in home.google.com/u/1/)." Header="Account index">
+                        <NumberBox
+                            x:Name="AuthUserBox"
+                            MinWidth="120"
+                            Maximum="9"
+                            Minimum="0"
+                            SpinButtonPlacementMode="Inline"
+                            ValueChanged="OnGoogleHomeOptionChanged" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Description="While the popup is open, device states are read again after this many seconds." Header="Refresh interval">
+                        <NumberBox
+                            x:Name="RefreshSecondsBox"
+                            MinWidth="120"
+                            Maximum="300"
+                            Minimum="3"
+                            SpinButtonPlacementMode="Inline"
+                            ValueChanged="OnGoogleHomeOptionChanged" />
+                    </toolkit:SettingsCard>
+                </toolkit:SettingsExpander.Items>
+            </toolkit:SettingsExpander>
+
+            <InfoBar
+                Title="About Google Home on the web"
+                Margin="0,4,0,0"
+                IsClosable="False"
+                IsOpen="True"
+                Message="Google doesn't offer an API for Windows apps, so Home Control uses the private interface of home.google.com. It may stop working when Google changes the site; Google Assistant (below) then takes over if it is set up. Your sign-in is kept in a private browser profile for this app only."
+                Severity="Informational" />
+
+            <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Text="Google Assistant (optional)" />
+            <TextBlock
+                Margin="0,0,0,8"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="Google Assistant switches devices by name, like saying “Hey Google, turn on the desk”. It needs your own (free) Google Cloud OAuth client, which takes about five minutes to set up once."
+                TextWrapping="Wrap" />
+
+            <toolkit:SettingsCard Description="When Google Home on the web doesn't respond, switch the device through Google Assistant by its name." Header="Use Google Assistant as a fallback">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE8AB;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <ToggleSwitch x:Name="FallbackSwitch" Toggled="OnFallbackToggled" />
+            </toolkit:SettingsCard>
 
             <!-- Step 1: OAuth client -->
             <toolkit:SettingsExpander
@@ -67,7 +147,7 @@
             </toolkit:SettingsExpander>
 
             <!-- Step 2: sign in -->
-            <toolkit:SettingsCard x:Name="SignInCard" Header="2. Google account">
+            <toolkit:SettingsCard x:Name="SignInCard" Header="2. Sign in to Google Assistant">
                 <toolkit:SettingsCard.HeaderIcon>
                     <FontIcon Glyph="&#xE77B;" />
                 </toolkit:SettingsCard.HeaderIcon>
@@ -97,8 +177,6 @@
                 x:Name="SignInError"
                 Title="Sign-in failed"
                 Severity="Error" />
-
-            <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Text="Google Assistant" />
 
             <toolkit:SettingsExpander Description="Ask Google Assistant anything to check that everything works." Header="Test the connection">
                 <toolkit:SettingsExpander.HeaderIcon>
@@ -164,7 +242,7 @@
             </toolkit:SettingsExpander>
 
             <InfoBar
-                Title="If commands don't work"
+                Title="If Google Assistant commands don't work"
                 Margin="0,12,0,0"
                 IsClosable="False"
                 IsOpen="True"

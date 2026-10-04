@@ -76,6 +76,15 @@ public sealed partial class TrayPopupWindow : Window
     /// <summary>The user wants the settings window (argument: page tag or null).</summary>
     internal event EventHandler<string?>? SettingsRequested;
 
+    /// <summary>The user wants to sign in to Google Home.</summary>
+    internal event EventHandler? GoogleSignInRequested;
+
+    /// <summary>The popup opened.</summary>
+    internal event EventHandler? Shown;
+
+    /// <summary>The popup closed (it is only hidden, never closed, until the app exits).</summary>
+    internal event EventHandler? Hidden;
+
     /// <summary>Opens the popup, or closes it when it is already open (tray icon click).</summary>
     internal void Toggle(PointInt32 anchor)
     {
@@ -108,6 +117,7 @@ public sealed partial class TrayPopupWindow : Window
 
         // The first time, the content is laid out only now: re-fit to its real height.
         RequestResize();
+        Shown?.Invoke(this, EventArgs.Empty);
     }
 
     internal void Hide()
@@ -120,6 +130,7 @@ public sealed partial class TrayPopupWindow : Window
         _isOpen = false;
         _hiddenAt = Environment.TickCount64;
         AppWindow.Hide();
+        Hidden?.Invoke(this, EventArgs.Empty);
     }
 
     internal void ApplyAppearance(ElementTheme theme, BackdropKind backdrop)
@@ -161,7 +172,8 @@ public sealed partial class TrayPopupWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(HomeViewModel.IsErrorOpen) or nameof(HomeViewModel.NeedsSignIn) or nameof(HomeViewModel.ShowDevices))
+        if (e.PropertyName is nameof(HomeViewModel.IsErrorOpen) or nameof(HomeViewModel.NeedsSignIn)
+            or nameof(HomeViewModel.ShowDevices) or nameof(HomeViewModel.ShowLoading) or nameof(HomeViewModel.ShowNoDevices))
         {
             RequestResize();
         }
@@ -309,7 +321,13 @@ public sealed partial class TrayPopupWindow : Window
         storyboard.Begin();
     }
 
-    private void OnSignInClick(object sender, RoutedEventArgs e) => RequestSettings("account");
+    private void OnSignInClick(object sender, RoutedEventArgs e)
+    {
+        Hide();
+        GoogleSignInRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnMoreOptionsClick(object sender, RoutedEventArgs e) => RequestSettings("account");
 
     private void OnAddDevicesClick(object sender, RoutedEventArgs e) => RequestSettings("devices");
 

@@ -1,5 +1,7 @@
 using HomeControl.Core.Assistant;
 using HomeControl.Core.Auth;
+using HomeControl.Core.Devices;
+using HomeControl.Core.GoogleHome;
 using HomeControl.Core.Security;
 using HomeControl.Core.Settings;
 using HomeControl.Interop;
@@ -28,18 +30,40 @@ internal sealed class AppHost
     private HotkeyService _hotkeys = null!;
     private TrayPopupWindow _popup = null!;
     private SettingsWindow? _settingsWindow;
+    private GoogleSignInWindow? _signInWindow;
     private AssistantClient _assistant = null!;
+    private GoogleHomeSession _googleHomeSession = null!;
+    private GoogleHomeClient _googleHome = null!;
+    private DispatcherQueueTimer _pollTimer = null!;
+    private Task<GoogleHomeSyncResult>? _syncTask;
     private IntPtr _trayIconHandle;
     private int _trayIconDpi;
     private bool _trayIconLight;
 
     public AppSettings Settings { get; private set; } = new();
 
+    /// <summary>
+    /// Running the smoke test: settings are never written and nothing contacts Google on its
+    /// own (the test calls the Google Home code itself).
+    /// </summary>
+    internal bool IsSmokeTest { get; init; }
+
     public GoogleAccount Account { get; private set; } = null!;
 
     public IDeviceController Controller { get; private set; } = null!;
 
     public IAssistantClient Assistant => _assistant;
+
+    /// <summary>State of the Google Home web session.</summary>
+    public GoogleHomeConnection GoogleHomeState => _googleHomeSession.State;
+
+    /// <summary>A Google Home sync is running.</summary>
+    public bool IsSyncingGoogleHome => _syncTask is not null;
+
+    /// <summary>Outcome of the last Google Home sync or sign-in problem, for the settings pages.</summary>
+    public string? GoogleHomeMessage { get; private set; }
+
+    internal GoogleHomeSession GoogleHomeSession => _googleHomeSession;
 
     public HomeViewModel Home { get; private set; } = null!;
 
@@ -55,8 +79,13 @@ internal sealed class AppHost
     /// <summary>Owner window for file pickers opened from the settings pages.</summary>
     public IntPtr SettingsWindowHandle => _settingsWindow is null ? IntPtr.Zero : WindowHelpers.GetHandle(_settingsWindow);
 
+    internal IntPtr SignInWindowHandle => _signInWindow is null ? IntPtr.Zero : WindowHelpers.GetHandle(_signInWindow);
+
     /// <summary>Raised after settings were saved and applied.</summary>
     public event EventHandler? SettingsApplied;
+
+    /// <summary>Raised on the UI thread when the Google Home session or a sync changed state.</summary>
+    public event EventHandler? GoogleHomeChanged;
 
     public void Start(bool background)
     {
@@ -67,6 +96,10 @@ internal sealed class AppHost
             Log.Info($"Settings could not be read and were reset: {_settingsStore.LoadError}");
         }
 
+        // Hosts the tray icon, the hotkeys and the hidden Google Home page.
+        _messageWindow = new MessageWindow();
+        _messageWindow.MessageReceived += OnMessage;
+
         var secrets = new SecretStore(AppPaths.SecretsFile, new DpapiProtector());
         Account = new GoogleAccount(_http, secrets);
         Account.StateChanged += (_, _) => _dispatcher.TryEnqueue(() =>
@@ -75,11 +108,21 @@ internal sealed class AppHost
             UpdateToolTip();
         });
 
+        _googleHomeSession = new GoogleHomeSession(_dispatcher, _messageWindow.Handle, () => Settings.GoogleHome);
+        _googleHomeSession.StateChanged += (_, _) => OnGoogleHomeStateChanged();
+        _googleHome = new GoogleHomeClient(_googleHomeSession);
+
         _assistant = new AssistantClient(Account, () => Settings.Assistant);
-        Controller = new AssistantDeviceController(_assistant, () => Settings.Assistant);
+        Controller = new CompositeDeviceController(
+            new GoogleHomeDeviceController(_googleHome),
+            new AssistantDeviceController(_assistant, () => Settings.Assistant),
+            () => Settings.UseAssistantFallback && Account.IsSignedIn);
 
         Home = new HomeViewModel(Controller, Account);
         Home.LoadDevices(Settings.Devices);
+
+        // Until the first request says otherwise, assume an earlier Google Home sign-in still works.
+        Home.SetGoogleHomeConnected(Settings.GoogleHome.Enabled);
         Home.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(HomeViewModel.Summary))
@@ -88,8 +131,6 @@ internal sealed class AppHost
             }
         };
 
-        _messageWindow = new MessageWindow();
-        _messageWindow.MessageReceived += OnMessage;
         _theme = new ThemeService(_messageWindow);
         _theme.Changed += (_, _) => ApplyAppearance();
         _hotkeys = new HotkeyService(_messageWindow);
@@ -103,21 +144,33 @@ internal sealed class AppHost
 
         _popup = new TrayPopupWindow(Home);
         _popup.SettingsRequested += (_, page) => OpenSettings(page);
+        _popup.GoogleSignInRequested += (_, _) => OpenGoogleSignIn();
+        _popup.Shown += (_, _) => OnPopupOpened();
+        _popup.Hidden += (_, _) => _pollTimer.Stop();
+
+        // Keeps the toggles current while the popup is open (one request for all Google Home devices).
+        _pollTimer = _dispatcher.CreateTimer();
+        _pollTimer.IsRepeating = true;
+        _pollTimer.Tick += (_, _) =>
+        {
+            if (_popup.IsOpen && Home.IsGoogleHomeConnected && !Home.IsRefreshing)
+            {
+                _ = Home.PollStatesAsync();
+            }
+        };
 
         ApplyAppearance();
         ApplyHotkeys();
         StartupService.RefreshPath();
 
+        if (Settings.GoogleHome.Enabled && !IsSmokeTest)
+        {
+            _ = SyncQuietlyAsync();
+        }
+
         if (!background)
         {
-            if (!Account.IsSignedIn || Settings.Devices.Count == 0)
-            {
-                OpenSettings(Account.IsSignedIn ? "devices" : "account");
-            }
-            else
-            {
-                ShowPopup();
-            }
+            ShowPopupOrSetup();
         }
     }
 
@@ -126,7 +179,10 @@ internal sealed class AppHost
     {
         try
         {
-            _settingsStore.Save(Settings);
+            if (!IsSmokeTest)
+            {
+                _settingsStore.Save(Settings);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -148,7 +204,23 @@ internal sealed class AppHost
         }
 
         _popup.ShowAt(GetPopupAnchor());
-        OnPopupOpened();
+    }
+
+    /// <summary>Shows the popup, or the settings page that is needed first.</summary>
+    public void ShowPopupOrSetup()
+    {
+        if (!Settings.GoogleHome.Enabled && !Account.IsSignedIn)
+        {
+            OpenSettings("account");
+        }
+        else if (Settings.Devices.Count == 0 && !Settings.GoogleHome.Enabled)
+        {
+            OpenSettings("devices");
+        }
+        else
+        {
+            ShowPopup();
+        }
     }
 
     public void OpenSettings(string? page = null)
@@ -167,8 +239,94 @@ internal sealed class AppHost
         _settingsWindow.Show(page);
     }
 
+    /// <summary>Opens the window where the user signs in to Google Home.</summary>
+    public void OpenGoogleSignIn()
+    {
+        _popup.Hide();
+        if (_signInWindow is null)
+        {
+            var window = new GoogleSignInWindow(_googleHomeSession);
+            window.SignedIn += (_, _) => _ = OnGoogleSignedInAsync(window);
+            window.Closed += (_, _) =>
+            {
+                if (_signInWindow == window)
+                {
+                    _signInWindow = null;
+                }
+            };
+            window.ApplyAppearance(EffectiveTheme, Settings.Backdrop);
+            _signInWindow = window;
+        }
+
+        _signInWindow.Activate();
+        NativeMethods.SetForegroundWindow(WindowHelpers.GetHandle(_signInWindow));
+    }
+
+    internal void CloseGoogleSignIn() => _signInWindow?.Close();
+
+    /// <summary>
+    /// Reads the devices from Google Home and merges them into the device list (new devices
+    /// are added, renamed ones updated, removed ones flagged). Concurrent calls share one sync.
+    /// </summary>
+    public async Task<GoogleHomeSyncResult> SyncGoogleHomeAsync()
+    {
+        if (_syncTask is { } running)
+        {
+            return await running;
+        }
+
+        var task = RunSyncAsync();
+        _syncTask = task;
+        Home.IsSyncing = true;
+        GoogleHomeChanged?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            var result = await task;
+            GoogleHomeMessage = null;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            GoogleHomeMessage = ex is GoogleHomeException ? ex.Message : "Couldn't load your devices: " + ex.Message;
+            throw;
+        }
+        finally
+        {
+            if (_syncTask == task)
+            {
+                _syncTask = null;
+            }
+
+            Home.IsSyncing = false;
+            GoogleHomeChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>Signs out of Google Home: deletes the private browser profile's cookies and data.</summary>
+    public async Task SignOutGoogleHomeAsync()
+    {
+        _signInWindow?.Close();
+        Settings.GoogleHome.Enabled = false;
+        SaveSettings();
+        Home.SetGoogleHomeConnected(false);
+        try
+        {
+            await _googleHomeSession.SignOutAsync();
+            GoogleHomeMessage = null;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Signing out of Google Home", ex);
+            GoogleHomeMessage = "Couldn't delete the sign-in data: " + ex.Message;
+        }
+
+        GoogleHomeChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public void Exit()
     {
+        _pollTimer.Stop();
+        _signInWindow?.Close();
         _settingsWindow?.Close();
         _hotkeys.Dispose();
         _trayIcon.Dispose();
@@ -178,6 +336,7 @@ internal sealed class AppHost
             NativeMethods.DestroyIcon(_trayIconHandle);
         }
 
+        _googleHomeSession.Dispose(); // its hidden browser lives in the message window
         _messageWindow.Dispose();
         _assistant.Dispose();
         Application.Current.Exit();
@@ -206,22 +365,76 @@ internal sealed class AppHost
     /// <summary>The theme the windows should use right now.</summary>
     public ElementTheme EffectiveTheme => _theme.Resolve(Settings.Theme);
 
-    private void TogglePopup(PointInt32 clickPoint)
-    {
-        var wasOpen = _popup.IsOpen;
-        _popup.Toggle(GetPopupAnchor(clickPoint));
-        if (!wasOpen && _popup.IsOpen)
-        {
-            OnPopupOpened();
-        }
-    }
+    private void TogglePopup(PointInt32 clickPoint) => _popup.Toggle(GetPopupAnchor(clickPoint));
 
     private void OnPopupOpened()
     {
-        if (Settings.RefreshStatesOnOpen)
+        if (IsSmokeTest)
         {
-            _ = Home.RefreshStatesAsync();
+            return;
         }
+
+        // Google Home states come in one cheap request; Assistant devices need one query each.
+        _ = Home.RefreshStatesAsync(includeAssistant: Settings.RefreshStatesOnOpen);
+        _pollTimer.Interval = TimeSpan.FromSeconds(Settings.GoogleHome.RefreshSeconds);
+        _pollTimer.Start();
+    }
+
+    private async Task OnGoogleSignedInAsync(GoogleSignInWindow window)
+    {
+        if (window.AuthUser is { } authUser && authUser != Settings.GoogleHome.AuthUser)
+        {
+            Settings.GoogleHome.AuthUser = authUser;
+        }
+
+        Settings.GoogleHome.Enabled = true;
+        SaveSettings();
+        Home.SetGoogleHomeConnected(true);
+        await SyncQuietlyAsync();
+    }
+
+    /// <summary>Syncs in the background; problems show on the settings pages and in the popup.</summary>
+    private async Task SyncQuietlyAsync()
+    {
+        try
+        {
+            await SyncGoogleHomeAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Syncing Google Home", ex);
+        }
+    }
+
+    private async Task<GoogleHomeSyncResult> RunSyncAsync()
+    {
+        var graph = await _googleHome.GetHomeGraphAsync(CancellationToken.None);
+        var result = GoogleHomeSync.Merge(Settings.Devices, graph);
+        Log.Info($"Google Home sync: {graph.Devices.Count} devices in {graph.Homes.Count} home(s); {result}");
+
+        Settings.GoogleHome.Enabled = true;
+        Settings.GoogleHome.LastSync = DateTimeOffset.Now;
+        SaveSettings();
+        Home.SetGoogleHomeConnected(true);
+        _ = Home.RefreshStatesAsync(includeAssistant: false);
+        return result;
+    }
+
+    private void OnGoogleHomeStateChanged()
+    {
+        switch (_googleHomeSession.State)
+        {
+            case GoogleHomeConnection.Connected:
+                Home.SetGoogleHomeConnected(true);
+                break;
+            case GoogleHomeConnection.SignedOut:
+            case GoogleHomeConnection.Unavailable:
+                Home.SetGoogleHomeConnected(false);
+                break;
+        }
+
+        UpdateToolTip();
+        GoogleHomeChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private PointInt32 GetPopupAnchor(PointInt32? clickPoint = null)
@@ -251,6 +464,20 @@ internal sealed class AppHost
             .Add("Open Home Control", ShowPopup, isDefault: true)
             .Add("Refresh device states", () => _ = Home.RefreshStatesAsync(), enabled: Home.ShowDevices)
             .Add("Turn all off", () => _ = Home.TurnAllOffAsync(), enabled: Home.ShowDevices)
+            .AddSeparator()
+            .Add(Settings.GoogleHome.Enabled ? "Sync devices from Google Home" : "Sign in to Google Home",
+                () =>
+                {
+                    if (Settings.GoogleHome.Enabled && Home.IsGoogleHomeConnected)
+                    {
+                        _ = SyncQuietlyAsync();
+                    }
+                    else
+                    {
+                        OpenGoogleSignIn();
+                    }
+                },
+                enabled: _syncTask is null)
             .AddSeparator()
             .Add("Settings", () => OpenSettings())
             .AddSeparator()
@@ -296,13 +523,13 @@ internal sealed class AppHost
             return;
         }
 
-        if (!Account.IsSignedIn)
+        if (!Home.IsConnected)
         {
-            _trayIcon.ShowNotification("Home Control", "Sign in to Google in Settings to control your devices.");
+            _trayIcon.ShowNotification("Home Control", "Sign in to Google Home in Settings › Account to control your devices.");
             return;
         }
 
-        var result = await device.ToggleAsync();
+        var result = await Home.ToggleFromShortcutAsync(device);
         if (result is null || !Settings.NotifyOnHotkey)
         {
             return;
@@ -321,6 +548,7 @@ internal sealed class AppHost
         WindowHelpers.SetMenuTheme(Settings.Theme);
         _popup.ApplyAppearance(theme, Settings.Backdrop);
         _settingsWindow?.ApplyAppearance(theme, Settings.Backdrop);
+        _signInWindow?.ApplyAppearance(theme, Settings.Backdrop);
         UpdateTrayIcon();
     }
 
@@ -367,15 +595,7 @@ internal sealed class AppHost
         {
             case MessageWindow.WM_SHOW_POPUP:
                 handled = true;
-                if (!Account.IsSignedIn || Settings.Devices.Count == 0)
-                {
-                    OpenSettings();
-                }
-                else
-                {
-                    ShowPopup();
-                }
-
+                ShowPopupOrSetup();
                 break;
             case NativeMethods.WM_DPICHANGED:
             case NativeMethods.WM_DISPLAYCHANGE:
