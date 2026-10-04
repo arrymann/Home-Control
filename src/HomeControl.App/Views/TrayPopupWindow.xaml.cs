@@ -203,10 +203,10 @@ public sealed partial class TrayPopupWindow : Window
             AppWindow.Move(new PointInt32(work.X + margin, work.Y + margin));
         }
 
-        // Size the client area to the content; the frame adds a thin border around it.
-        AppWindow.ResizeClient(new SizeInt32(
-            (int)Math.Round(PopupWidth * scale),
-            (int)Math.Round(Math.Min(MeasureContentHeight(), maxHeight) * scale)));
+        var frame = GetFrameSize();
+        AppWindow.Resize(new SizeInt32(
+            (int)Math.Round(PopupWidth * scale) + frame.Width,
+            (int)Math.Round(Math.Min(MeasureContentHeight(), maxHeight) * scale) + frame.Height));
         var width = AppWindow.Size.Width;
         var height = AppWindow.Size.Height;
 
@@ -232,6 +232,24 @@ public sealed partial class TrayPopupWindow : Window
         }
 
         AppWindow.Move(new PointInt32(x, y));
+    }
+
+    /// <summary>
+    /// Pixels the window frame adds around the XAML content (border and invisible resize
+    /// borders). Measured from the last layout, because AppWindow.ResizeClient assumes a
+    /// caption that this borderless window doesn't have.
+    /// </summary>
+    private SizeInt32 GetFrameSize()
+    {
+        if (Root.XamlRoot is { } xamlRoot && Root.ActualWidth > 0 && Root.ActualHeight > 0)
+        {
+            var size = AppWindow.Size;
+            return new SizeInt32(
+                Math.Max(0, size.Width - (int)Math.Round(Root.ActualWidth * xamlRoot.RasterizationScale)),
+                Math.Max(0, size.Height - (int)Math.Round(Root.ActualHeight * xamlRoot.RasterizationScale)));
+        }
+
+        return new SizeInt32(16, 16); // first open; corrected once the content is laid out
     }
 
     private double MeasureContentHeight()
