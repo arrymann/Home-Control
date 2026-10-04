@@ -157,6 +157,8 @@ internal static class SmokeTest
             {
                 errors.Add($"WebView2: the test script returned {result} instead of 2.");
             }
+
+            Log.Info($"Smoke test: the hidden Google Home page ran a script (result {result}).");
         }
         catch (GoogleHomeException ex) when (host.GoogleHomeState == GoogleHomeConnection.Unavailable)
         {
@@ -174,8 +176,10 @@ internal static class SmokeTest
             var result = await host.SyncGoogleHomeAsync().WaitAsync(TimeSpan.FromSeconds(90));
             Log.Info($"Smoke test: Google Home sync worked ({result}); this PC is signed in.");
         }
-        catch (GoogleHomeSignInRequiredException)
+        catch (GoogleHomeSignInRequiredException ex)
         {
+            Log.Info($"Smoke test: sync without a Google sign-in asked to sign in, as expected ({ex.Message}).");
+
             // Expected without a Google sign-in: the app must now know it is signed out.
             if (host.Home.IsGoogleHomeConnected)
             {

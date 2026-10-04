@@ -58,6 +58,16 @@ jobs:
           $text = (Get-Content $result -Raw).Trim()
           Write-Output $text
           if ($text -ne 'OK') { throw 'Smoke test failed' }
+      - name: Print screenshots (temporary)
+        if: matrix.platform == 'x64'
+        shell: pwsh
+        run: |
+          Get-ChildItem (Join-Path $env:RUNNER_TEMP 'screenshots') -Filter *.jpg | ForEach-Object {
+            $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
+            for ($i = 0; $i -lt $b64.Length; $i += 3000) {
+              Write-Output ("SHOT {0} {1}" -f $_.Name, $b64.Substring($i, [Math]::Min(3000, $b64.Length - $i)))
+            }
+          }
       - name: Upload screenshots
         if: matrix.platform == 'x64'
         uses: actions/upload-artifact@v6
