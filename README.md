@@ -17,9 +17,9 @@ Google's [Home APIs](https://developers.home.google.com/apis) only ship SDKs for
 
 Home Control signs in to [home.google.com](https://home.google.com) once, in a small browser window inside the app (Microsoft Edge WebView2). After that it keeps that page loaded in a hidden browser and sends the same requests the web app sends. Those requests go to Google's `googlehomefoyer-pa` API and are authorized from the page's own session.
 
-- **Devices are listed automatically.** Every device that can be turned on and off (lights, plugs, switches, TVs and so on) is added, with its room. Devices added later in Google Home appear at the next start or after **Sync now**.
+- **Devices are listed automatically.** Every device that can be turned on and off (lights, plugs, switches, TVs and so on) is added, with its room. Devices added later in Google Home appear at the next start or after **Sync now**. If a sync fails (no network yet, for example), it is retried once Google Home answers again or when you open the flyout.
 - **State is live.** The flyout reads every device's state in one request when it opens, and again every 10 seconds while it stays open. Offline devices are shown faded.
-- **Your sign-in stays on this PC,** in a private browser profile for this app only: `%LOCALAPPDATA%\HomeControl\WebView2`. **Sign out** clears it.
+- **Your sign-in stays on this PC,** in a private browser profile for this app only: `%LOCALAPPDATA%\HomeControl\WebView2`. **Sign out** clears it. While you're signed out, devices from Google Home are switched through Google Assistant if it is set up.
 
 The catch: this is the private interface of Google's own website, not an API Google offers to other apps. It can stop working whenever Google changes the site. Google may also refuse to sign in inside an embedded browser ("This browser or app may not be secure"). Use it for your own home only. If it breaks, Google Assistant (below) can take over.
 
@@ -38,9 +38,9 @@ Google is replacing Google Assistant with Gemini on phones. The cloud Assistant 
 
 ### Google Home (about 1 minute)
 
-Open **Settings › Account** and click **Sign in** under *Google Home*, or click **Sign in** in the flyout. Sign in with the Google account that has your home. When home.google.com loads, the devices are imported, and you can close the window. Use **Settings › Devices** to hide devices from the tray, rename them, change their icons and add shortcuts.
+Open **Settings › Account** and click **Sign in** under *Google Home*, or click **Sign in** in the flyout. The window opens Google's sign-in page; sign in with the Google account that has your home. Back on home.google.com, Home Control loads your devices and the window says how many it found; then you can close it. If Google doesn't accept the session (for example after a password change), the window asks you to sign in again. Use **Settings › Devices** to hide devices from the tray, rename them, change their icons and add shortcuts. Shortcuts keep working for devices hidden from the tray.
 
-If several Google accounts are signed in and the wrong home shows up, set **Account index** under *Advanced* (`0` is the first account, `1` the second, …).
+If several Google accounts are signed in and the wrong home shows up, switch accounts on the page in the sign-in window, or set **Account index** under *Advanced* (`0` is the first account, `1` the second, …). If anything goes wrong, `%LOCALAPPDATA%\HomeControl\home-control.log` lists the pages the sign-in window loaded.
 
 ### Google Assistant (optional, about 5 minutes)
 
