@@ -20,6 +20,7 @@ public sealed partial class AccountPage : Page
     private CancellationTokenSource? _signInCts;
     private string? _syncSummary;
     private bool _loading;
+    private bool _onScreen;
 
     public AccountPage()
     {
@@ -35,6 +36,7 @@ public sealed partial class AccountPage : Page
         base.OnNavigatedTo(e);
         Account.StateChanged += OnAccountStateChanged;
         App.Host.GoogleHomeChanged += OnGoogleHomeChanged;
+        _onScreen = true;
         Load();
     }
 
@@ -43,7 +45,14 @@ public sealed partial class AccountPage : Page
         base.OnNavigatedFrom(e);
         Account.StateChanged -= OnAccountStateChanged;
         App.Host.GoogleHomeChanged -= OnGoogleHomeChanged;
-        _signInCts?.Cancel();
+        _onScreen = false;
+
+        // Switching pages cancels a sign-in that is waiting for the browser; closing the settings
+        // window (which navigates to a blank Page) lets it finish in the background.
+        if (e.SourcePageType != typeof(Page))
+        {
+            _signInCts?.Cancel();
+        }
     }
 
     private void OnAccountStateChanged(object? sender, EventArgs e) => DispatcherQueue.TryEnqueue(UpdateStatus);
@@ -297,14 +306,24 @@ public sealed partial class AccountPage : Page
         }
         catch (Exception ex) when (ex is OAuthException or HttpRequestException)
         {
-            SignInError.Message = ex.Message;
-            SignInError.IsOpen = true;
+            if (_onScreen)
+            {
+                SignInError.Message = ex.Message;
+                SignInError.IsOpen = true;
+            }
+            else
+            {
+                Log.Error("Signing in to Google Assistant", ex);
+            }
         }
         finally
         {
             _signInCts?.Dispose();
             _signInCts = null;
-            UpdateStatus();
+            if (_onScreen)
+            {
+                UpdateStatus();
+            }
         }
     }
 

@@ -266,9 +266,24 @@ public sealed class HomeViewModel : BindableBase
     /// <summary>Toggles a device from its shortcut, reading its current state first if it is old.</summary>
     public async Task<DeviceCommandResult?> ToggleFromShortcutAsync(DeviceViewModel device)
     {
-        if (BatchReader?.CanReadInBatch(device.Config) == true && device.IsStale(TimeSpan.FromSeconds(20)))
+        // Read directly rather than through RefreshBatchAsync, which skips the read while a poll is
+        // running; devices hidden from the popup are never polled, so this is their only read.
+        if (BatchReader is { } reader && reader.CanReadInBatch(device.Config) && device.IsStale(TimeSpan.FromSeconds(20)))
         {
-            await RefreshBatchAsync([device], showErrors: false, CancellationToken.None);
+            try
+            {
+                var started = Stopwatch.GetTimestamp();
+                var states = await reader.ReadStatesAsync([device.Config], CancellationToken.None);
+                if (states.TryGetValue(device.Id, out var status))
+                {
+                    device.ApplyStatus(status, started);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The toggle below reports the real problem (and falls back to Assistant if it can).
+                Log.Error("Reading the state before a shortcut toggle", ex);
+            }
         }
 
         return await device.ToggleAsync();
