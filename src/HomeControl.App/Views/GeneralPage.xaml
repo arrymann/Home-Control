@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="HomeControl.Views.GeneralPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:HomeControl.Controls"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
+
+    <ScrollViewer>
+        <StackPanel
+            MaxWidth="{StaticResource SettingsPageMaxWidth}"
+            Margin="36,24,36,36"
+            Spacing="4">
+            <TextBlock
+                Margin="0,0,0,16"
+                Style="{StaticResource TitleTextBlockStyle}"
+                Text="General" />
+
+            <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Margin="1,0,0,6" Text="Appearance" />
+            <toolkit:SettingsCard Description="The tray icon always matches your taskbar." Header="App theme">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE790;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <ComboBox x:Name="ThemeBox" MinWidth="200" SelectionChanged="OnThemeChanged">
+                    <ComboBoxItem Content="Use Windows setting" Tag="System" />
+                    <ComboBoxItem Content="Light" Tag="Light" />
+                    <ComboBoxItem Content="Dark" Tag="Dark" />
+                </ComboBox>
+            </toolkit:SettingsCard>
+            <toolkit:SettingsCard Description="Mica tints the windows with your desktop background (Windows 11)." Header="Window material">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE771;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <ComboBox x:Name="BackdropBox" MinWidth="200" SelectionChanged="OnBackdropChanged">
+                    <ComboBoxItem Content="Mica" Tag="Mica" />
+                    <ComboBoxItem Content="Mica Alt" Tag="MicaAlt" />
+                    <ComboBoxItem Content="Acrylic" Tag="Acrylic" />
+                    <ComboBoxItem Content="None" Tag="None" />
+                </ComboBox>
+            </toolkit:SettingsCard>
+
+            <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Text="Shortcuts" />
+            <toolkit:SettingsCard Description="Opens the device popup from anywhere. Device shortcuts are set on the Devices page." Header="Open Home Control">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE765;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <controls:ShortcutRecorder x:Name="PopupShortcut" />
+            </toolkit:SettingsCard>
+            <toolkit:SettingsCard Description="Confirms what happened when you use a device shortcut." Header="Show a notification after a shortcut">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xEA8F;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <ToggleSwitch x:Name="NotifySwitch" Toggled="OnNotifyToggled" />
+            </toolkit:SettingsCard>
+
+            <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Text="Behavior" />
+            <toolkit:SettingsCard Description="Asks Google Assistant about every device each time the popup opens. Slower, but shows changes made elsewhere." Header="Check device states when opening">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE72C;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <ToggleSwitch x:Name="RefreshSwitch" Toggled="OnRefreshToggled" />
+            </toolkit:SettingsCard>
+            <toolkit:SettingsCard Description="Starts in the tray when you sign in to Windows." Header="Start with Windows">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE7E8;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <ToggleSwitch x:Name="StartupSwitch" Toggled="OnStartupToggled" />
+            </toolkit:SettingsCard>
+
+            <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Text="About" />
+            <toolkit:SettingsExpander x:Name="AboutExpander" Header="Home Control">
+                <toolkit:SettingsExpander.HeaderIcon>
+                    <FontIcon Glyph="&#xE80F;" />
+                </toolkit:SettingsExpander.HeaderIcon>
+                <toolkit:SettingsExpander.Items>
+                    <toolkit:SettingsCard Description="Settings, encrypted sign-in data and the log file." Header="Data folder">
+                        <Button Click="OnOpenDataFolderClick" Content="Open folder" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard ContentAlignment="Left">
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Device control uses the Google Assistant API (google.assistant.embedded.v1alpha2). Icons: Fluent UI System Icons, MIT license."
+                            TextWrapping="Wrap" />
+                    </toolkit:SettingsCard>
+                </toolkit:SettingsExpander.Items>
+            </toolkit:SettingsExpander>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

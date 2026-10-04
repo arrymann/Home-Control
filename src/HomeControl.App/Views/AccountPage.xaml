@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="HomeControl.Views.AccountPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
+
+    <ScrollViewer>
+        <StackPanel
+            MaxWidth="{StaticResource SettingsPageMaxWidth}"
+            Margin="36,24,36,36"
+            Spacing="4">
+            <TextBlock
+                Margin="0,0,0,8"
+                Style="{StaticResource TitleTextBlockStyle}"
+                Text="Account" />
+            <TextBlock
+                Margin="0,0,0,16"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="Google's Home APIs are only available to Android and iOS apps, so Home Control talks to your Google Home through the Google Assistant API. Google requires your own (free) Google Cloud OAuth client for that – it takes about five minutes to set up once."
+                TextWrapping="Wrap" />
+
+            <!-- Step 1: OAuth client -->
+            <toolkit:SettingsExpander
+                x:Name="ClientExpander"
+                Description="Create a Desktop OAuth client in Google Cloud and import its JSON file."
+                Header="1. Google Cloud OAuth client">
+                <toolkit:SettingsExpander.HeaderIcon>
+                    <FontIcon Glyph="&#xE8D7;" />
+                </toolkit:SettingsExpander.HeaderIcon>
+                <TextBlock x:Name="ClientStatus" VerticalAlignment="Center" />
+                <toolkit:SettingsExpander.Items>
+                    <toolkit:SettingsCard ContentAlignment="Left">
+                        <RichTextBlock>
+                            <Paragraph Margin="0,0,0,4"><Run Text="1. " /><Hyperlink NavigateUri="https://console.cloud.google.com/projectcreate">Create a Google Cloud project</Hyperlink><Run Text=" (or pick an existing one)." /></Paragraph>
+                            <Paragraph Margin="0,0,0,4"><Run Text="2. Enable the " /><Hyperlink NavigateUri="https://console.cloud.google.com/apis/library/embeddedassistant.googleapis.com">Google Assistant API</Hyperlink><Run Text=" in that project." /></Paragraph>
+                            <Paragraph Margin="0,0,0,4"><Run Text="3. Set up the " /><Hyperlink NavigateUri="https://console.cloud.google.com/auth/overview">OAuth consent screen</Hyperlink><Run Text=": audience External, and add your Google account as a test user." /></Paragraph>
+                            <Paragraph Margin="0,0,0,4"><Run Text="4. " /><Hyperlink NavigateUri="https://console.cloud.google.com/auth/clients">Create an OAuth client</Hyperlink><Run Text=" of type “Desktop app” and download its JSON file." /></Paragraph>
+                            <Paragraph><Run Text="5. Import the file below, then sign in." /></Paragraph>
+                        </RichTextBlock>
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Description="The client_secret_….json file downloaded from Google Cloud." Header="Import client file">
+                        <Button Click="OnImportClick" Content="Import JSON…" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Header="Client ID">
+                        <TextBox
+                            x:Name="ClientIdBox"
+                            Width="320"
+                            PlaceholderText="1234567890-abc.apps.googleusercontent.com" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Header="Client secret">
+                        <PasswordBox
+                            x:Name="ClientSecretBox"
+                            Width="320"
+                            PlaceholderText="GOCSPX-…" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock
+                                x:Name="ClientMessage"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <Button Click="OnSaveClientClick" Content="Save client" />
+                        </StackPanel>
+                    </toolkit:SettingsCard>
+                </toolkit:SettingsExpander.Items>
+            </toolkit:SettingsExpander>
+
+            <!-- Step 2: sign in -->
+            <toolkit:SettingsCard x:Name="SignInCard" Header="2. Google account">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE77B;" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ProgressRing
+                        x:Name="SignInProgress"
+                        Width="16"
+                        Height="16"
+                        IsActive="False" />
+                    <Button
+                        x:Name="CancelSignInButton"
+                        Click="OnCancelSignInClick"
+                        Content="Cancel"
+                        Visibility="Collapsed" />
+                    <Button
+                        x:Name="SignInButton"
+                        Click="OnSignInClick"
+                        Content="Sign in with Google"
+                        Style="{StaticResource AccentButtonStyle}" />
+                    <Button
+                        x:Name="SignOutButton"
+                        Click="OnSignOutClick"
+                        Content="Sign out" />
+                </StackPanel>
+            </toolkit:SettingsCard>
+            <InfoBar
+                x:Name="SignInError"
+                Title="Sign-in failed"
+                Severity="Error" />
+
+            <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Text="Google Assistant" />
+
+            <toolkit:SettingsExpander Description="Ask Google Assistant anything to check that everything works." Header="Test the connection">
+                <toolkit:SettingsExpander.HeaderIcon>
+                    <FontIcon Glyph="&#xE8BD;" />
+                </toolkit:SettingsExpander.HeaderIcon>
+                <toolkit:SettingsExpander.Items>
+                    <toolkit:SettingsCard ContentAlignment="Left">
+                        <StackPanel Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBox
+                                    x:Name="TestQueryBox"
+                                    Width="320"
+                                    Text="what time is it" />
+                                <Button
+                                    x:Name="TestButton"
+                                    Click="OnTestClick"
+                                    Content="Ask" />
+                                <ProgressRing
+                                    x:Name="TestProgress"
+                                    Width="16"
+                                    Height="16"
+                                    IsActive="False" />
+                            </StackPanel>
+                            <TextBlock
+                                x:Name="TestResult"
+                                IsTextSelectionEnabled="True"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </toolkit:SettingsCard>
+                </toolkit:SettingsExpander.Items>
+            </toolkit:SettingsExpander>
+
+            <toolkit:SettingsExpander Description="How devices are switched, for other languages or unusual device names." Header="Language and commands">
+                <toolkit:SettingsExpander.HeaderIcon>
+                    <FontIcon Glyph="&#xE774;" />
+                </toolkit:SettingsExpander.HeaderIcon>
+                <toolkit:SettingsExpander.Items>
+                    <toolkit:SettingsCard Description="Language of the commands and of Google Assistant's answers." Header="Language">
+                        <ComboBox x:Name="LanguageBox" MinWidth="200" SelectionChanged="OnLanguageChanged" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Description="{}{name} is replaced with the device's Google Home name." Header="Turn on">
+                        <TextBox x:Name="OnTemplateBox" Width="320" LostFocus="OnTemplateLostFocus" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Header="Turn off">
+                        <TextBox x:Name="OffTemplateBox" Width="320" LostFocus="OnTemplateLostFocus" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Description="Used by “Refresh device states”." Header="Ask for the state">
+                        <TextBox x:Name="StateTemplateBox" Width="320" LostFocus="OnTemplateLostFocus" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Description="Regular expression that means “it's on” in an answer." Header="“On” answer">
+                        <TextBox x:Name="OnPatternBox" Width="320" FontFamily="Consolas" LostFocus="OnTemplateLostFocus" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Description="Regular expression that means “it's off” in an answer." Header="“Off” answer">
+                        <TextBox x:Name="OffPatternBox" Width="320" FontFamily="Consolas" LostFocus="OnTemplateLostFocus" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Description="Regular expression that means the command failed." Header="Failure answer">
+                        <TextBox x:Name="FailurePatternBox" Width="320" FontFamily="Consolas" LostFocus="OnTemplateLostFocus" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard>
+                        <Button Click="OnResetCommandsClick" Content="Reset to defaults" />
+                    </toolkit:SettingsCard>
+                </toolkit:SettingsExpander.Items>
+            </toolkit:SettingsExpander>
+
+            <InfoBar
+                Title="If commands don't work"
+                Margin="0,12,0,0"
+                IsClosable="False"
+                IsOpen="True"
+                Message="Turn on “Personal results” for your account in the Google Home app (Settings › Google Assistant), and make sure the device names match exactly. Apps in Google Cloud's “Testing” mode have to sign in again every 7 days; publish the app on the OAuth consent screen to avoid that."
+                Severity="Informational" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

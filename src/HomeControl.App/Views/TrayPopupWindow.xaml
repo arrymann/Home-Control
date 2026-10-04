@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="HomeControl.Views.TrayPopupWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:helpers="using:HomeControl.Helpers"
+    xmlns:vm="using:HomeControl.ViewModels"
+    Title="Home Control">
+
+    <Grid x:Name="Root">
+        <!-- Shown only when the window material is turned off. -->
+        <Border x:Name="SolidBackground" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}" Visibility="Collapsed" />
+
+        <Grid x:Name="ContentRoot" VerticalAlignment="Top">
+            <Grid.RenderTransform>
+                <TranslateTransform x:Name="SlideTransform" />
+            </Grid.RenderTransform>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <Grid Padding="16,14,16,10" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Viewbox Width="20" Height="20" VerticalAlignment="Center">
+                    <PathIcon x:Name="HomeIcon" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                </Viewbox>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Home Control" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="{x:Bind ViewModel.Summary, Mode=OneWay}" />
+                </StackPanel>
+            </Grid>
+
+            <!-- Errors -->
+            <InfoBar
+                Grid.Row="1"
+                Margin="12,0,12,8"
+                IsOpen="{x:Bind ViewModel.IsErrorOpen, Mode=TwoWay}"
+                Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
+                Severity="Warning" />
+
+            <!-- Not signed in -->
+            <StackPanel
+                Grid.Row="2"
+                Margin="24,12,24,24"
+                HorizontalAlignment="Center"
+                Spacing="12"
+                Visibility="{x:Bind helpers:Ui.Visible(ViewModel.NeedsSignIn), Mode=OneWay}">
+                <FontIcon
+                    FontSize="32"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Glyph="&#xE77B;" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                    Text="Connect your Google account" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="Sign in once to control the devices in your Google Home."
+                    TextAlignment="Center"
+                    TextWrapping="Wrap" />
+                <Button
+                    HorizontalAlignment="Center"
+                    Click="OnSignInClick"
+                    Content="Set up"
+                    Style="{StaticResource AccentButtonStyle}" />
+            </StackPanel>
+
+            <!-- Signed in, nothing added yet -->
+            <StackPanel
+                Grid.Row="2"
+                Margin="24,12,24,24"
+                HorizontalAlignment="Center"
+                Spacing="12"
+                Visibility="{x:Bind helpers:Ui.Visible(ViewModel.ShowNoDevices), Mode=OneWay}">
+                <FontIcon
+                    FontSize="32"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Glyph="&#xE710;" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                    Text="No devices yet" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="Add the lights, plugs and switches you want to control from here."
+                    TextAlignment="Center"
+                    TextWrapping="Wrap" />
+                <Button
+                    HorizontalAlignment="Center"
+                    Click="OnAddDevicesClick"
+                    Content="Add devices"
+                    Style="{StaticResource AccentButtonStyle}" />
+            </StackPanel>
+
+            <!-- Devices -->
+            <ScrollViewer
+                x:Name="DeviceScroller"
+                Grid.Row="2"
+                Padding="12,0,12,8"
+                HorizontalScrollMode="Disabled"
+                VerticalScrollBarVisibility="Auto"
+                Visibility="{x:Bind helpers:Ui.Visible(ViewModel.ShowDevices), Mode=OneWay}">
+                <ItemsControl IsTabStop="False" ItemsSource="{x:Bind ViewModel.Devices}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="4" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:DeviceViewModel">
+                            <Grid
+                                MinHeight="60"
+                                Padding="12,8,0,8"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1"
+                                ColumnSpacing="12"
+                                CornerRadius="{StaticResource OverlayCornerRadius}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <Grid Width="36" Height="36" VerticalAlignment="Center">
+                                    <Ellipse Fill="{ThemeResource ControlAltFillColorTertiaryBrush}" />
+                                    <Ellipse Fill="{ThemeResource AccentFillColorDefaultBrush}" Visibility="{x:Bind helpers:Ui.Visible(IsOn), Mode=OneWay}" />
+                                    <Viewbox
+                                        Width="18"
+                                        Height="18"
+                                        Visibility="{x:Bind helpers:Ui.Collapsed(IsOn), Mode=OneWay}">
+                                        <PathIcon Data="{x:Bind helpers:Ui.DeviceIcon(Kind), Mode=OneWay}" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                    </Viewbox>
+                                    <Viewbox
+                                        Width="18"
+                                        Height="18"
+                                        Visibility="{x:Bind helpers:Ui.Visible(IsOn), Mode=OneWay}">
+                                        <PathIcon Data="{x:Bind helpers:Ui.DeviceIconOn(Kind), Mode=OneWay}" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+                                    </Viewbox>
+                                </Grid>
+
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyTextBlockStyle}"
+                                        Text="{x:Bind Label, Mode=OneWay}"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="NoWrap" />
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Subtitle, Mode=OneWay}"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="NoWrap"
+                                        ToolTipService.ToolTip="{x:Bind Error, Mode=OneWay}"
+                                        Visibility="{x:Bind helpers:Ui.VisibleIfText(Subtitle), Mode=OneWay}" />
+                                </StackPanel>
+
+                                <Grid Grid.Column="2" VerticalAlignment="Center">
+                                    <ProgressRing
+                                        Width="16"
+                                        Height="16"
+                                        Margin="0,0,16,0"
+                                        HorizontalAlignment="Right"
+                                        IsActive="{x:Bind IsBusy, Mode=OneWay}" />
+                                    <ToggleSwitch
+                                        MinWidth="0"
+                                        AutomationProperties.Name="{x:Bind Label, Mode=OneWay}"
+                                        IsEnabled="{x:Bind CanToggle, Mode=OneWay}"
+                                        IsOn="{x:Bind IsOn, Mode=TwoWay}"
+                                        OffContent=""
+                                        OnContent=""
+                                        Visibility="{x:Bind helpers:Ui.Collapsed(IsBusy), Mode=OneWay}" />
+                                </Grid>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- Footer, like the Quick Settings flyout -->
+            <Grid
+                Grid.Row="3"
+                Padding="16,8,8,8"
+                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                BorderThickness="0,1,0,0"
+                ColumnSpacing="4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <HyperlinkButton
+                    Padding="8,4"
+                    Click="OnAllOffClick"
+                    Content="Turn all off"
+                    IsEnabled="{x:Bind ViewModel.ShowDevices, Mode=OneWay}" />
+                <ProgressRing
+                    Grid.Column="1"
+                    Width="16"
+                    Height="16"
+                    Margin="8,0"
+                    IsActive="{x:Bind ViewModel.IsRefreshing, Mode=OneWay}" />
+                <Button
+                    Grid.Column="2"
+                    AutomationProperties.Name="Refresh device states"
+                    Click="OnRefreshClick"
+                    IsEnabled="{x:Bind ViewModel.CanRefresh, Mode=OneWay}"
+                    Style="{StaticResource IconButtonStyle}"
+                    ToolTipService.ToolTip="Refresh device states">
+                    <FontIcon FontSize="14" Glyph="&#xE72C;" />
+                </Button>
+                <Button
+                    Grid.Column="3"
+                    AutomationProperties.Name="Settings"
+                    Click="OnSettingsClick"
+                    Style="{StaticResource IconButtonStyle}"
+                    ToolTipService.ToolTip="Settings">
+                    <FontIcon FontSize="14" Glyph="&#xE713;" />
+                </Button>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

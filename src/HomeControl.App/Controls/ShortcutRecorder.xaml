@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="HomeControl.Controls.ShortcutRecorder"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <StackPanel Spacing="4">
+        <StackPanel Orientation="Horizontal" Spacing="4">
+            <Button
+                x:Name="RecordButton"
+                MinWidth="190"
+                HorizontalContentAlignment="Left"
+                AutomationProperties.Name="Record shortcut"
+                Click="OnRecordClick"
+                LostFocus="OnRecordLostFocus"
+                PreviewKeyDown="OnRecordPreviewKeyDown"
+                ToolTipService.ToolTip="Click, then press the keys of the shortcut">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <FontIcon FontSize="14" Glyph="&#xE765;" />
+                    <TextBlock x:Name="ShortcutText" Text="Not set" />
+                </StackPanel>
+            </Button>
+            <Button
+                x:Name="ClearButton"
+                AutomationProperties.Name="Remove shortcut"
+                Click="OnClearClick"
+                Style="{StaticResource IconButtonStyle}"
+                ToolTipService.ToolTip="Remove shortcut"
+                Visibility="Collapsed">
+                <FontIcon FontSize="12" Glyph="&#xE711;" />
+            </Button>
+        </StackPanel>
+        <TextBlock
+            x:Name="HintText"
+            MaxWidth="320"
+            HorizontalAlignment="Left"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            Style="{StaticResource CaptionTextBlockStyle}"
+            TextWrapping="Wrap"
+            Visibility="Collapsed" />
+        <TextBlock
+            x:Name="ErrorText"
+            MaxWidth="320"
+            HorizontalAlignment="Left"
+            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+            Style="{StaticResource CaptionTextBlockStyle}"
+            TextWrapping="Wrap"
+            Visibility="Collapsed" />
+    </StackPanel>
+</UserControl>

@@ -1,0 +1,25 @@
+# Build output
+bin/
+obj/
+artifacts/
+publish/
+AppPackages/
+BundleArtifacts/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userprefs
+launchSettings.json
+
+# Test results
+TestResults/
+*.trx
+coverage*.xml
+
+# Never commit Google credentials
+client_secret*.json
+secrets.dat

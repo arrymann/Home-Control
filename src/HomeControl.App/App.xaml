@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Application
+    x:Class="HomeControl.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Borderless square button for icons (refresh, settings, edit...). -->
+            <Style
+                x:Key="IconButtonStyle"
+                BasedOn="{StaticResource DefaultButtonStyle}"
+                TargetType="Button">
+                <Setter Property="Width" Value="36" />
+                <Setter Property="Height" Value="36" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+            </Style>
+
+            <!-- Section heading inside settings pages. -->
+            <Style x:Key="SettingsSectionHeaderStyle" BasedOn="{StaticResource BodyStrongTextBlockStyle}" TargetType="TextBlock">
+                <Setter Property="Margin" Value="1,28,0,6" />
+            </Style>
+
+            <x:Double x:Key="SettingsPageMaxWidth">1000</x:Double>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

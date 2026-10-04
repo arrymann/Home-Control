@@ -1,0 +1,57 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HomeControl.Core", "src\HomeControl.Core\HomeControl.Core.csproj", "{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HomeControl.Core.Tests", "tests\HomeControl.Core.Tests\HomeControl.Core.Tests.csproj", "{630B1D7C-4892-444C-9347-3D92C74F20A1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HomeControl.App", "src\HomeControl.App\HomeControl.App.csproj", "{EB94508C-1D50-43C3-8001-362824439D67}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|ARM64 = Debug|ARM64
+		Release|x64 = Release|x64
+		Release|ARM64 = Release|ARM64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9}.Debug|x64.Build.0 = Debug|Any CPU
+		{630B1D7C-4892-444C-9347-3D92C74F20A1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{630B1D7C-4892-444C-9347-3D92C74F20A1}.Debug|x64.Build.0 = Debug|Any CPU
+		{EB94508C-1D50-43C3-8001-362824439D67}.Debug|x64.ActiveCfg = Debug|x64
+		{EB94508C-1D50-43C3-8001-362824439D67}.Debug|x64.Build.0 = Debug|x64
+		{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9}.Debug|ARM64.ActiveCfg = Debug|Any CPU
+		{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9}.Debug|ARM64.Build.0 = Debug|Any CPU
+		{630B1D7C-4892-444C-9347-3D92C74F20A1}.Debug|ARM64.ActiveCfg = Debug|Any CPU
+		{630B1D7C-4892-444C-9347-3D92C74F20A1}.Debug|ARM64.Build.0 = Debug|Any CPU
+		{EB94508C-1D50-43C3-8001-362824439D67}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{EB94508C-1D50-43C3-8001-362824439D67}.Debug|ARM64.Build.0 = Debug|ARM64
+		{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9}.Release|x64.ActiveCfg = Release|Any CPU
+		{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9}.Release|x64.Build.0 = Release|Any CPU
+		{630B1D7C-4892-444C-9347-3D92C74F20A1}.Release|x64.ActiveCfg = Release|Any CPU
+		{630B1D7C-4892-444C-9347-3D92C74F20A1}.Release|x64.Build.0 = Release|Any CPU
+		{EB94508C-1D50-43C3-8001-362824439D67}.Release|x64.ActiveCfg = Release|x64
+		{EB94508C-1D50-43C3-8001-362824439D67}.Release|x64.Build.0 = Release|x64
+		{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9}.Release|ARM64.ActiveCfg = Release|Any CPU
+		{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9}.Release|ARM64.Build.0 = Release|Any CPU
+		{630B1D7C-4892-444C-9347-3D92C74F20A1}.Release|ARM64.ActiveCfg = Release|Any CPU
+		{630B1D7C-4892-444C-9347-3D92C74F20A1}.Release|ARM64.Build.0 = Release|Any CPU
+		{EB94508C-1D50-43C3-8001-362824439D67}.Release|ARM64.ActiveCfg = Release|ARM64
+		{EB94508C-1D50-43C3-8001-362824439D67}.Release|ARM64.Build.0 = Release|ARM64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{DB2D2A3C-93AA-4BDB-B6E1-0F18E344F8F9} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{630B1D7C-4892-444C-9347-3D92C74F20A1} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{EB94508C-1D50-43C3-8001-362824439D67} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+	EndGlobalSection
+EndGlobal
