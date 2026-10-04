@@ -194,6 +194,13 @@ public sealed class DeviceViewModel : BindableBase
         }
     }
 
+    /// <summary>Smoke test only: set a state without contacting Google.</summary>
+    internal void SimulateState(bool isOn)
+    {
+        State = isOn;
+        SyncToggle(isOn);
+    }
+
     private void SyncToggle(bool value)
     {
         _syncingToggle = true;

@@ -43,6 +43,20 @@ jobs:
           dotnet publish src/HomeControl.App/HomeControl.App.csproj `
             -c Release -p:Platform=${{ matrix.platform }} -r $rid --self-contained `
             -o publish/HomeControl-$rid
+      - name: Smoke test (open every window and page)
+        if: matrix.platform == 'x64'
+        shell: pwsh
+        run: |
+          $result = Join-Path $env:RUNNER_TEMP 'smoke-test.txt'
+          $app = Start-Process -FilePath 'publish/HomeControl-win-x64/HomeControl.exe' `
+            -ArgumentList '--smoke-test', $result -PassThru
+          if (-not $app.WaitForExit(180000)) { $app.Kill(); throw 'Smoke test timed out' }
+          $log = Join-Path $env:LOCALAPPDATA 'HomeControl\home-control.log'
+          if (Test-Path $log) { Get-Content $log }
+          if (-not (Test-Path $result)) { throw "Smoke test wrote no result (exit code $($app.ExitCode))" }
+          $text = (Get-Content $result -Raw).Trim()
+          Write-Output $text
+          if ($text -ne 'OK') { throw 'Smoke test failed' }
       - uses: actions/upload-artifact@v6
         with:
           name: HomeControl-${{ matrix.platform }}

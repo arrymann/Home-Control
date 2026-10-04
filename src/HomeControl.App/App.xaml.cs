@@ -29,8 +29,19 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        var background = Environment.GetCommandLineArgs().Contains(StartupService.BackgroundArgument, StringComparer.OrdinalIgnoreCase);
+        var arguments = Environment.GetCommandLineArgs();
+        var smokeTest = Array.FindIndex(arguments, a => a.Equals(SmokeTest.Argument, StringComparison.OrdinalIgnoreCase));
+        var background = smokeTest >= 0 || arguments.Contains(StartupService.BackgroundArgument, StringComparer.OrdinalIgnoreCase);
+
         Host = new AppHost();
         Host.Start(background);
+
+        if (smokeTest >= 0)
+        {
+            var resultPath = smokeTest + 1 < arguments.Length
+                ? arguments[smokeTest + 1]
+                : Path.Combine(Path.GetTempPath(), "homecontrol-smoke-test.txt");
+            _ = SmokeTest.RunAsync(Host, resultPath);
+        }
     }
 }

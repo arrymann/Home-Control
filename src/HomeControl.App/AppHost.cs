@@ -47,6 +47,9 @@ internal sealed class AppHost
 
     public ThemeService Theme => _theme;
 
+    /// <summary>XAML root of the settings window, for dialogs.</summary>
+    public XamlRoot? SettingsXamlRoot => _settingsWindow?.Content.XamlRoot;
+
     /// <summary>Owner window for file pickers opened from the settings pages.</summary>
     public IntPtr SettingsWindowHandle => _settingsWindow is null ? IntPtr.Zero : WindowHelpers.GetHandle(_settingsWindow);
 

@@ -184,6 +184,9 @@ public sealed class HomeViewModel : BindableBase
 
     internal void OnDeviceStateChanged() => OnPropertyChanged(nameof(Summary));
 
+    /// <summary>Smoke test only: show the device list without a Google account.</summary>
+    internal void SimulateSignedIn() => IsSignedIn = true;
+
     internal void ReportError(string message)
     {
         ErrorMessage = message;
