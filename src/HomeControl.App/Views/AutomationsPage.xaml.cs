@@ -51,6 +51,7 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
     private readonly DispatcherQueueTimer _infoTimer;
     private Automation? _editing;
     private List<GeoPlace> _places = [];
+    private string? _placesQuery;
     private CancellationTokenSource? _searchCts;
     private bool _loading;
 
@@ -214,6 +215,11 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         }
 
         automation.Enabled = toggle.IsOn;
+        if (!automation.Enabled)
+        {
+            Service.Engine.Stop(automation.Id);
+        }
+
         Service.Save();
     }
 
@@ -236,6 +242,7 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         };
         if (await confirm.ShowAsync() == ContentDialogResult.Primary)
         {
+            Service.Engine.Stop(automation.Id);
             Service.Document.Automations.Remove(automation);
             Service.Save();
             RefreshList();
@@ -347,7 +354,8 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         var errors = issues.Count(i => i.Severity == IssueSeverity.Error);
         IssuesBar.Severity = errors > 0 ? InfoBarSeverity.Error : InfoBarSeverity.Warning;
         IssuesBar.Title = errors > 0 ? "Not ready yet" : "Check this";
-        IssuesBar.Message = string.Join("  ", issues.Select(i => i.Message).Distinct().Take(3)) + (issues.Count > 3 ? $"  (+{issues.Count - 3} more)" : string.Empty);
+        var messages = issues.Select(i => i.Message).Distinct().ToList();
+        IssuesBar.Message = string.Join("  ", messages.Take(3)) + (messages.Count > 3 ? $"  (+{messages.Count - 3} more)" : string.Empty);
         IssuesBar.IsOpen = true;
     }
 
@@ -370,6 +378,11 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         }
 
         _editing.Enabled = EnabledSwitch.IsOn;
+        if (!_editing.Enabled)
+        {
+            Service.Engine.Stop(_editing.Id);
+        }
+
         Service.Save();
     }
 
@@ -540,16 +553,23 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
 
         _searchCts?.Cancel();
         var cts = _searchCts = new CancellationTokenSource();
+
+        // The old results belong to the old text: don't let Enter pick one of them.
+        _places = [];
+        _placesQuery = null;
+        sender.ItemsSource = null;
         try
         {
             await Task.Delay(350, cts.Token); // wait until typing pauses
-            var places = await Service.Geocoding.SearchAsync(sender.Text, cts.Token);
+            var query = sender.Text.Trim();
+            var places = await Service.Geocoding.SearchAsync(query, cts.Token);
             if (cts.IsCancellationRequested)
             {
                 return;
             }
 
             _places = places.ToList();
+            _placesQuery = query;
             sender.ItemsSource = _places.Count == 0 && sender.Text.Trim().Length >= 2
                 ? new List<string> { "No places found" }
                 : _places.Select(p => p.DisplayName).ToList();
@@ -566,19 +586,22 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
 
     private void OnPlaceChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs args)
     {
-        if (args.SelectedItem is string name && _places.FirstOrDefault(p => p.DisplayName == name) is { } place)
+        // Moving through the list with the arrow keys: show the place; Enter or a click submits it.
+        if (args.SelectedItem is string name && _places.Any(p => p.DisplayName == name))
         {
-            sender.Text = place.DisplayName;
-            SetLocation(place.ToLocation());
+            sender.Text = name;
         }
     }
 
     private void OnPlaceSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
-        if (args.ChosenSuggestion is null && _places.Count > 0)
+        var place = args.ChosenSuggestion is string name
+            ? _places.FirstOrDefault(p => p.DisplayName == name)
+            : _places.Count > 0 && _placesQuery == sender.Text.Trim() ? _places[0] : null;
+        if (place is not null)
         {
-            sender.Text = _places[0].DisplayName;
-            SetLocation(_places[0].ToLocation());
+            sender.Text = place.DisplayName;
+            SetLocation(place.ToLocation());
         }
     }
 

@@ -21,6 +21,9 @@ public sealed class AutomationEngine
     /// <summary>Time triggers missed by more than this (PC asleep, app not running) are skipped.</summary>
     public static readonly TimeSpan MissedGrace = TimeSpan.FromMinutes(2);
 
+    /// <summary>Ticks further apart than this mean the PC slept; idle triggers skip that tick.</summary>
+    private static readonly TimeSpan IdleGap = TimeSpan.FromSeconds(30);
+
     private readonly IAutomationHost _host;
     private readonly Func<AutomationDocument> _document;
     private readonly AutomationRunner _runner;
@@ -49,13 +52,19 @@ public sealed class AutomationEngine
         HandlePcEvent(PcEvent.Started);
     }
 
-    /// <summary>Fires the triggers for something that happened to the PC. Idle/Active come from <see cref="Tick"/>.</summary>
-    public void HandlePcEvent(PcEvent pcEvent)
+    /// <summary>
+    /// Fires the triggers for something that happened to the PC (Idle/Active come from <see cref="Tick"/>).
+    /// The task completes when those runs are done, so the caller can hold off sleep briefly.
+    /// </summary>
+    public Task HandlePcEvent(PcEvent pcEvent, CancellationToken cancellationToken = default)
     {
-        foreach (var (automation, trigger) in Triggers<PcEventTriggerNode>().Where(t => t.Node.Event == pcEvent).ToList())
-        {
-            StartRun(automation, trigger, RunOptions.Normal);
-        }
+        var options = pcEvent == PcEvent.Sleeping ? RunOptions.Sleep : RunOptions.Normal;
+        var runs = Triggers<PcEventTriggerNode>()
+            .Where(t => t.Node.Event == pcEvent)
+            .ToList()
+            .Select(t => StartRun(t.Automation, t.Node, options, cancellationToken))
+            .ToList();
+        return Task.WhenAll(runs);
     }
 
     /// <summary>Checks time-of-day and idle triggers. Call every few seconds.</summary>
@@ -63,7 +72,13 @@ public sealed class AutomationEngine
     {
         var now = _host.Now;
         var last = _lastTick ?? now;
-        _lastTick = now;
+
+        // A small step back (time sync) keeps the old start, so nothing fires twice; a big
+        // change (the user set the clock) starts over from now.
+        if (now > last || last - now > MissedGrace)
+        {
+            _lastTick = now;
+        }
 
         if (now > last)
         {
@@ -82,6 +97,14 @@ public sealed class AutomationEngine
         var idle = _host.GetPcStatus().Idle;
         var previous = _lastIdle;
         _lastIdle = idle;
+
+        // After sleep (or a long freeze) the idle time includes the time asleep: don't treat
+        // that as the user having been away at the PC.
+        if (now - last > IdleGap)
+        {
+            return;
+        }
+
         foreach (var (automation, trigger) in Triggers<PcEventTriggerNode>().ToList())
         {
             var threshold = TimeSpan.FromMinutes(Math.Max(1, trigger.IdleMinutes));
@@ -114,6 +137,15 @@ public sealed class AutomationEngine
     /// <summary>Runs an automation from one of its triggers right away (the editor's "Run now").</summary>
     public Task<AutomationRunResult> RunNowAsync(Automation automation, AutomationNode trigger) =>
         StartRun(automation, trigger, RunOptions.Test);
+
+    /// <summary>Stops a running automation (e.g. it was turned off or deleted while waiting).</summary>
+    public void Stop(string automationId)
+    {
+        if (_running.Remove(automationId, out var cts))
+        {
+            TryCancel(cts);
+        }
+    }
 
     /// <summary>Stops every running automation (e.g. when the app exits).</summary>
     public void StopAll()
@@ -163,6 +195,12 @@ public sealed class AutomationEngine
         try
         {
             result = await _runner.RunAsync(automation, trigger, options, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            // The runner records failures itself; this is the safety net, so a run always reports back.
+            result = new AutomationRunResult();
+            result.Add(new AutomationStep(trigger.Id, NodeCategory.Trigger, $"Stopped: {ex.Message}", false));
         }
         finally
         {

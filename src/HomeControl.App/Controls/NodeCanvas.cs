@@ -307,6 +307,7 @@ public sealed class NodeCanvas : UserControl
         view.SizeChanged += (_, _) => ScheduleRedraw();
         view.Edited += (_, _) => Changed?.Invoke(this, EventArgs.Empty);
         view.DeleteRequested += (_, _) => DeleteNode(view);
+        view.RightTapped += (_, e) => e.Handled = true; // not the canvas's "add node" menu
 
         foreach (var port in view.OutputPorts.Values.Append(view.InputPort).OfType<FrameworkElement>())
         {

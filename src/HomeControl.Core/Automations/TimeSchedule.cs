@@ -8,20 +8,24 @@ public static class TimeSchedule
     /// or the sun event plus the offset. Null when the sun event doesn't happen that day or no
     /// location is set.
     /// </summary>
-    public static DateTimeOffset? Resolve(TimePoint point, DateOnly date, GeoLocation? location, TimeZoneInfo zone)
+    public static DateTimeOffset? Resolve(TimePoint point, DateOnly date, GeoLocation? location, TimeZoneInfo zone) =>
+        ResolveAll(point, date, location, zone).Select(t => (DateTimeOffset?)t).FirstOrDefault();
+
+    /// <summary>Like <see cref="Resolve"/>, but a sun event can happen twice on one local day (twilight near midnight).</summary>
+    public static IEnumerable<DateTimeOffset> ResolveAll(TimePoint point, DateOnly date, GeoLocation? location, TimeZoneInfo zone)
     {
         if (point.Reference == TimeReference.Clock)
         {
-            return AtLocalTime(date.ToDateTime(point.Time), zone);
+            return [AtLocalTime(date.ToDateTime(point.Time), zone)];
         }
 
         if (location is not { IsValid: true })
         {
-            return null;
+            return [];
         }
 
-        var sun = SolarCalculator.GetEvent(date, location, SolarCalculator.ToSunEvent(point.Reference), zone);
-        return sun is { } value ? TimeZoneInfo.ConvertTime(value.AddMinutes(point.OffsetMinutes), zone) : null;
+        return SolarCalculator.GetEvents(date, location, SolarCalculator.ToSunEvent(point.Reference), zone)
+            .Select(sun => TimeZoneInfo.ConvertTime(sun.AddMinutes(point.OffsetMinutes), zone));
     }
 
     /// <summary>The first time after <paramref name="after"/> on one of <paramref name="days"/>, or null.</summary>
@@ -42,9 +46,12 @@ public static class TimeSchedule
                 continue;
             }
 
-            if (Resolve(point, date, location, zone) is { } time && time > after)
+            foreach (var time in ResolveAll(point, date, location, zone).OrderBy(t => t))
             {
-                return time;
+                if (time > after)
+                {
+                    return time;
+                }
             }
         }
 
@@ -65,44 +72,73 @@ public static class TimeSchedule
         var last = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(toInclusive, zone).DateTime).AddDays(1);
         for (var date = first; date <= last; date = date.AddDays(1))
         {
-            if (Includes(days, date) &&
-                Resolve(point, date, location, zone) is { } time &&
-                time > fromExclusive && time <= toInclusive)
+            if (!Includes(days, date))
             {
-                yield return time;
+                continue;
+            }
+
+            foreach (var time in ResolveAll(point, date, location, zone))
+            {
+                if (time > fromExclusive && time <= toInclusive)
+                {
+                    yield return time;
+                }
             }
         }
     }
 
     /// <summary>
     /// Is <paramref name="now"/> between the last <paramref name="from"/> and the next <paramref name="to"/>?
-    /// The window can wrap past midnight (e.g. sunset to sunrise). False when the times can't be
-    /// worked out (sun events without a location, or on a day without them).
+    /// The window can wrap past midnight (e.g. sunset to sunrise). When sun events don't happen
+    /// (polar day or night), a sunset-to-sunrise style window is decided by where the sun is.
+    /// False when the times can't be worked out otherwise (e.g. sun events without a location).
     /// </summary>
     public static bool IsWithin(DateTimeOffset now, TimePoint from, TimePoint to, GeoLocation? location, TimeZoneInfo zone)
     {
         var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, zone).DateTime);
 
-        DateTimeOffset? lastFrom = null;
-        for (var shift = -1; shift <= 0; shift++)
+        // A negative offset can move tomorrow's event into today, so look one day ahead too.
+        var lastFrom = Enumerable.Range(-1, 3)
+            .SelectMany(shift => ResolveAll(from, today.AddDays(shift), location, zone))
+            .Where(time => time <= now)
+            .Select(time => (DateTimeOffset?)time)
+            .Max();
+
+        if (lastFrom is { } start)
         {
-            if (Resolve(from, today.AddDays(shift), location, zone) is { } time && time <= now && (lastFrom is null || time > lastFrom))
+            var end = Enumerable.Range(-1, 4)
+                .SelectMany(shift => ResolveAll(to, today.AddDays(shift), location, zone))
+                .Where(time => time > start)
+                .Select(time => (DateTimeOffset?)time)
+                .Min();
+            if (end is { } stop)
             {
-                lastFrom = time;
+                return now < stop;
             }
         }
 
-        if (lastFrom is null)
+        return BySunPosition(now, from, to, location);
+    }
+
+    /// <summary>For windows between an evening and a morning sun event (or the reverse) when one of them doesn't happen.</summary>
+    private static bool BySunPosition(DateTimeOffset now, TimePoint from, TimePoint to, GeoLocation? location)
+    {
+        if (!from.IsSolar || !to.IsSolar || location is not { IsValid: true })
         {
             return false;
         }
 
-        for (var shift = -1; shift <= 1; shift++)
+        var start = SolarCalculator.ToSunEvent(from.Reference);
+        var end = SolarCalculator.ToSunEvent(to.Reference);
+        var elevation = SolarCalculator.ElevationDegrees(now, location);
+        if (SolarCalculator.IsEvening(start) && SolarCalculator.IsMorning(end))
         {
-            if (Resolve(to, today.AddDays(shift), location, zone) is { } end && end > lastFrom)
-            {
-                return now < end;
-            }
+            return elevation < SolarCalculator.EventAltitude(start); // e.g. polar night: dark all day
+        }
+
+        if (SolarCalculator.IsMorning(start) && SolarCalculator.IsEvening(end))
+        {
+            return elevation > SolarCalculator.EventAltitude(start); // e.g. midnight sun
         }
 
         return false;

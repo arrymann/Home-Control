@@ -1,3 +1,5 @@
+using Grpc.Core;
+using HomeControl.Core.Assistant;
 using HomeControl.Core.Devices;
 using HomeControl.Core.GoogleHome;
 
@@ -45,6 +47,9 @@ public sealed record RunOptions
     /// <summary>"Run now" from the editor: everything for real, but waits are skipped.</summary>
     public static readonly RunOptions Test = new() { SkipDelays = true };
 
+    /// <summary>For "goes to sleep": the PC is about to stop, so no waits, retries or power actions.</summary>
+    public static readonly RunOptions Sleep = Shutdown;
+
     public bool SkipDelays { get; init; }
 
     public bool AllowPcPower { get; init; } = true;
@@ -81,7 +86,8 @@ public sealed class AutomationRunResult
     {
         get
         {
-            var actions = Steps.Where(s => s.Category == NodeCategory.Action).Select(s => s.Text).ToList();
+            // What was done, plus anything that went wrong (e.g. a condition that couldn't be checked).
+            var actions = Steps.Where(s => s.Category == NodeCategory.Action || !s.Success).Select(s => s.Text).ToList();
             var text = actions.Count > 0
                 ? string.Join("; ", actions)
                 : Steps.LastOrDefault(s => s.Category == NodeCategory.Condition)?.Text is { } condition
@@ -125,7 +131,7 @@ public sealed class AutomationRunner
         {
             await FollowAsync(automation, trigger.Id, Ports.Then, options, result, () => ++steps, cancellationToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             result.Cancelled = true;
         }
@@ -158,7 +164,19 @@ public sealed class AutomationRunner
         string next;
         if (node.Category == NodeCategory.Condition)
         {
-            var (met, text) = await EvaluateAsync(node, cancellationToken);
+            bool met;
+            string text;
+            try
+            {
+                (met, text) = await EvaluateAsync(node, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                // E.g. a device's state couldn't be read: this branch stops, the others carry on.
+                result.Add(new(node.Id, node.Category, $"{NodeText.Describe(node, _host.GetDeviceName)}: couldn't check ({ex.Message})", false));
+                return;
+            }
+
             result.Add(new(node.Id, node.Category, text, true));
             next = met ? Ports.Yes : Ports.No;
         }
@@ -249,12 +267,13 @@ public sealed class AutomationRunner
                     return new(node.Id, node.Category, $"{description}: not supported", false);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception ex)
         {
+            // Includes timeouts (TaskCanceledException without our token being cancelled).
             return new(node.Id, node.Category, $"{description} failed: {ex.Message}", false);
         }
     }
@@ -276,7 +295,7 @@ public sealed class AutomationRunner
                     ? new(node.Id, node.Category, Done(command, _host.GetDeviceName(deviceId)!, result.IsOn), true)
                     : new(node.Id, node.Category, $"{description}: {result.Message}", false);
             }
-            catch (Exception ex) when (options.RetryDevices && attempt < RetryDelays.Length && IsTransient(ex))
+            catch (Exception ex) when (options.RetryDevices && attempt < RetryDelays.Length && IsTransient(ex) && !cancellationToken.IsCancellationRequested)
             {
                 // Typically right after waking up, before the network is back.
                 await _host.DelayAsync(RetryDelays[attempt], cancellationToken);
@@ -295,6 +314,8 @@ public sealed class AutomationRunner
     {
         GoogleHomeSignInRequiredException => false,
         GoogleHomeException or HttpRequestException or TimeoutException => true,
+        TaskCanceledException { InnerException: TimeoutException } => true, // HttpClient timeout
+        AssistantException { IsAuthenticationError: false, InnerException: RpcException { StatusCode: StatusCode.Unavailable or StatusCode.DeadlineExceeded } } => true,
         _ => false,
     };
 }

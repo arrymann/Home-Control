@@ -1,3 +1,5 @@
+using Grpc.Core;
+using HomeControl.Core.Assistant;
 using HomeControl.Core.Automations;
 using HomeControl.Core.Devices;
 using HomeControl.Core.GoogleHome;
@@ -44,8 +46,18 @@ internal sealed class FakeAutomationHost : IAutomationHost
 
     public string? GetDeviceName(string? deviceId) => deviceId is not null && Devices.TryGetValue(deviceId, out var d) ? d.Name : null;
 
-    public Task<bool?> GetDeviceStateAsync(string deviceId, CancellationToken cancellationToken) =>
-        Task.FromResult(Devices.TryGetValue(deviceId, out var d) ? d.On : null);
+    /// <summary>When set, reading this device's state throws it.</summary>
+    public (string DeviceId, Exception Error)? StateFailure { get; set; }
+
+    public Task<bool?> GetDeviceStateAsync(string deviceId, CancellationToken cancellationToken)
+    {
+        if (StateFailure is { } failure && failure.DeviceId == deviceId)
+        {
+            throw failure.Error;
+        }
+
+        return Task.FromResult(Devices.TryGetValue(deviceId, out var d) ? d.On : null);
+    }
 
     public Task<DeviceCommandResult> SetDeviceAsync(string deviceId, DeviceCommand command, CancellationToken cancellationToken)
     {
@@ -199,6 +211,68 @@ public class TimeScheduleTests
         Assert.Single(TimeSchedule.OccurrencesBetween(point, Weekdays.All, from, from.AddSeconds(5), null, NewYork));
         Assert.Empty(TimeSchedule.OccurrencesBetween(point, Weekdays.All, from.AddSeconds(5), from.AddSeconds(10), null, NewYork));
         Assert.Empty(TimeSchedule.OccurrencesBetween(point, Weekdays.Weekend, from, from.AddSeconds(5), null, NewYork)); // a Tuesday
+    }
+}
+
+public class TimeScheduleEdgeTests
+{
+    private static readonly TimeZoneInfo London = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
+    private static readonly TimeZoneInfo Oslo = TimeZoneInfo.FindSystemTimeZoneById("Europe/Oslo");
+    private static readonly GeoLocation Greenwich = new(51.4769, 0.0);
+    private static readonly GeoLocation Tromso = new(69.6492, 18.9553);
+
+    [Fact]
+    public void A_twilight_time_can_happen_twice_on_one_day()
+    {
+        // In late July astronomical dusk in London drifts back across midnight.
+        var date = new DateOnly(2025, 7, 27);
+        var point = new TimePoint { Reference = TimeReference.AstronomicalDusk };
+
+        var both = TimeSchedule.ResolveAll(point, date, Greenwich, London).ToList();
+        Assert.Equal(2, both.Count);
+
+        var start = new DateTimeOffset(2025, 7, 27, 0, 0, 0, TimeSpan.FromHours(1));
+        var fired = TimeSchedule.OccurrencesBetween(point, Weekdays.All, start, start.AddDays(1), Greenwich, London).ToList();
+        Assert.Equal(both.OrderBy(t => t), fired.OrderBy(t => t));
+
+        var afterFirst = TimeSchedule.NextOccurrence(point, Weekdays.All, both.Min().AddMinutes(1), Greenwich, London);
+        Assert.Equal(both.Max(), afterFirst);
+    }
+
+    [Fact]
+    public void Window_start_moved_from_tomorrow_by_a_negative_offset()
+    {
+        // From 8 hours before sunrise (about 20:45 the evening before) until 23:00.
+        var from = new TimePoint { Reference = TimeReference.Sunrise, OffsetMinutes = -8 * 60 };
+        var to = new TimePoint { Time = new TimeOnly(23, 0) };
+
+        Assert.True(TimeSchedule.IsWithin(new DateTimeOffset(2025, 6, 2, 22, 0, 0, TimeSpan.FromHours(1)), from, to, Greenwich, London));
+        Assert.False(TimeSchedule.IsWithin(new DateTimeOffset(2025, 6, 2, 23, 30, 0, TimeSpan.FromHours(1)), from, to, Greenwich, London));
+    }
+
+    [Theory]
+    [InlineData(12, 20, 12, true)]  // polar night: dark at noon
+    [InlineData(6, 21, 0, false)]   // midnight sun: not dark at midnight
+    public void Sunset_to_sunrise_when_the_sun_does_not_set_or_rise(int month, int day, int hour, bool expected)
+    {
+        var now = new DateTimeOffset(new DateTime(2025, month, day, hour, 0, 0), Oslo.GetUtcOffset(new DateTime(2025, month, day, hour, 0, 0)));
+        var dark = TimeSchedule.IsWithin(
+            now, new TimePoint { Reference = TimeReference.Sunset }, new TimePoint { Reference = TimeReference.Sunrise }, Tromso, Oslo);
+        var light = TimeSchedule.IsWithin(
+            now, new TimePoint { Reference = TimeReference.Sunrise }, new TimePoint { Reference = TimeReference.Sunset }, Tromso, Oslo);
+
+        Assert.Equal(expected, dark);
+        Assert.Equal(!expected, light);
+    }
+
+    [Fact]
+    public void Sun_elevation_is_sensible()
+    {
+        var noon = SolarCalculator.ElevationDegrees(new DateTimeOffset(2025, 6, 21, 12, 2, 0, TimeSpan.Zero), Greenwich);
+        var midnight = SolarCalculator.ElevationDegrees(new DateTimeOffset(2025, 6, 21, 0, 2, 0, TimeSpan.Zero), Greenwich);
+
+        Assert.InRange(noon, 61.5, 62.5);       // 90 - 51.48 + 23.44
+        Assert.InRange(midnight, -15.5, -14.5); // 51.48 + 23.44 - 90
     }
 }
 
@@ -414,6 +488,66 @@ public class AutomationRunnerTests
     }
 }
 
+public class AutomationRunnerErrorTests
+{
+    [Fact]
+    public async Task A_condition_that_cannot_be_checked_fails_its_branch_only()
+    {
+        var host = new FakeAutomationHost { StateFailure = ("desk", new HttpRequestException("No connection")) };
+        var automation = new Automation();
+        var trigger = automation.Add(new PcEventTriggerNode());
+        var deskOn = automation.Add(new DeviceStateConditionNode { DeviceId = "desk" }, y: 0);
+        automation.Wire(trigger, deskOn);
+        automation.Wire(deskOn, automation.Add(new DeviceActionNode { DeviceId = "desk", Command = DeviceCommand.TurnOff }), Ports.Yes);
+        automation.Wire(trigger, automation.Add(new DeviceActionNode { DeviceId = "lamp" }, y: 100));
+
+        var result = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Normal, default);
+
+        Assert.True(result.Failed);
+        Assert.False(result.Cancelled);
+        Assert.Contains("No connection", result.Summary);
+        Assert.Equal(["TurnOn lamp"], host.Commands);
+    }
+
+    public static TheoryData<Exception> TransientErrors() => new()
+    {
+        new AssistantException("Assistant unavailable", inner: new RpcException(new Status(StatusCode.Unavailable, "down"))),
+        new TaskCanceledException("Timed out", new TimeoutException()),
+    };
+
+    [Theory]
+    [MemberData(nameof(TransientErrors))]
+    public async Task Timeouts_and_unavailable_services_are_retried(Exception error)
+    {
+        var host = new FakeAutomationHost();
+        host.Failures.Enqueue(error);
+        var automation = new Automation();
+        var trigger = automation.Add(new PcEventTriggerNode());
+        automation.Wire(trigger, automation.Add(new DeviceActionNode { DeviceId = "lamp" }));
+
+        var result = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Normal, default);
+
+        Assert.False(result.Failed);
+        Assert.False(result.Cancelled);
+        Assert.Equal(2, host.Commands.Count);
+    }
+
+    [Fact]
+    public async Task A_timeout_without_retries_is_a_failure_not_a_cancellation()
+    {
+        var host = new FakeAutomationHost();
+        host.Failures.Enqueue(new TaskCanceledException("Timed out", new TimeoutException()));
+        var automation = new Automation();
+        var trigger = automation.Add(new ShutdownTriggerNode());
+        automation.Wire(trigger, automation.Add(new DeviceActionNode { DeviceId = "lamp" }));
+
+        var result = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Shutdown, default);
+
+        Assert.True(result.Failed);
+        Assert.False(result.Cancelled);
+    }
+}
+
 public class AutomationEngineTests
 {
     private static (AutomationEngine Engine, FakeAutomationHost Host, AutomationDocument Document) Create(params Automation[] automations)
@@ -545,8 +679,8 @@ public class AutomationEngineTests
         var completed = new List<AutomationRunResult>();
         engine.RunCompleted += (_, e) => completed.Add(e.Result);
 
-        engine.HandlePcEvent(PcEvent.Locked);
-        engine.HandlePcEvent(PcEvent.Locked);
+        _ = engine.HandlePcEvent(PcEvent.Locked);
+        _ = engine.HandlePcEvent(PcEvent.Locked);
         Assert.Single(engine.RunningAutomations);
 
         await WaitUntil(() => completed.Count == 1);
@@ -591,6 +725,99 @@ public class AutomationEngineTests
         Assert.NotNull(next);
         Assert.Equal(new DateOnly(2025, 6, 2), DateOnly.FromDateTime(next!.Value.DateTime)); // London sunset ~21:15
         Assert.InRange(next.Value.Hour, 21, 21);
+    }
+
+    [Fact]
+    public async Task Stopping_an_automation_cancels_its_waiting_run()
+    {
+        var automation = new Automation();
+        var trigger = automation.Add(new PcEventTriggerNode { Event = PcEvent.Locked });
+        var wait = automation.Add(new DelayActionNode { Seconds = 60 });
+        automation.Wire(trigger, wait);
+        automation.Wire(wait, automation.Add(new AllOffActionNode()));
+        var (engine, host, _) = Create(automation);
+        host.DelayGate = new TaskCompletionSource();
+
+        var run = engine.HandlePcEvent(PcEvent.Locked);
+        Assert.Single(engine.RunningAutomations);
+        engine.Stop(automation.Id);
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(engine.RunningAutomations);
+        Assert.Equal(0, host.AllOffCount);
+        Assert.Null(automation.LastResult); // stopped before it did anything
+    }
+
+    [Fact]
+    public void A_small_clock_step_back_does_not_fire_twice()
+    {
+        var (engine, host, _) = Create(At(new TimeOnly(18, 0)));
+        host.Now = new DateTimeOffset(2025, 6, 2, 17, 59, 55, TimeSpan.FromHours(1));
+        engine.Start();
+
+        host.Now = host.Now.AddSeconds(10); // 18:00:05
+        engine.Tick();
+        host.Now = host.Now.AddSeconds(-20); // time sync: 17:59:45
+        engine.Tick();
+        host.Now = host.Now.AddSeconds(25); // 18:00:10
+        engine.Tick();
+
+        Assert.Single(host.Commands);
+    }
+
+    [Fact]
+    public void Setting_the_clock_back_a_lot_starts_over()
+    {
+        var (engine, host, _) = Create(At(new TimeOnly(18, 0)));
+        host.Now = new DateTimeOffset(2025, 6, 2, 19, 0, 0, TimeSpan.FromHours(1));
+        engine.Start();
+
+        host.Now = new DateTimeOffset(2025, 6, 2, 17, 59, 55, TimeSpan.FromHours(1));
+        engine.Tick();
+        host.Now = host.Now.AddSeconds(10);
+        engine.Tick();
+
+        Assert.Single(host.Commands);
+    }
+
+    [Fact]
+    public void Waking_from_sleep_is_not_idle_time()
+    {
+        var automation = new Automation();
+        var idle = automation.Add(new PcEventTriggerNode { Event = PcEvent.Idle, IdleMinutes = 10 });
+        automation.Wire(idle, automation.Add(new DeviceActionNode { DeviceId = "lamp", Command = DeviceCommand.TurnOff }));
+        var (engine, host, _) = Create(automation);
+        engine.Start();
+
+        host.Now = host.Now.AddHours(2); // asleep: the idle time now includes the night
+        host.Status = host.Status with { Idle = TimeSpan.FromHours(2) };
+        engine.Tick();
+        Assert.Empty(host.Commands);
+
+        host.Now = host.Now.AddSeconds(5); // the user is back
+        host.Status = host.Status with { Idle = TimeSpan.Zero };
+        engine.Tick();
+        Assert.Empty(host.Commands);
+    }
+
+    [Fact]
+    public async Task Going_to_sleep_skips_waits_and_retries_and_finishes()
+    {
+        var automation = new Automation();
+        var trigger = automation.Add(new PcEventTriggerNode { Event = PcEvent.Sleeping });
+        var wait = automation.Add(new DelayActionNode { Seconds = 60 });
+        var off = automation.Add(new DeviceActionNode { DeviceId = "desk", Command = DeviceCommand.TurnOff });
+        automation.Wire(trigger, wait);
+        automation.Wire(wait, off);
+        var (engine, host, _) = Create(automation);
+        host.DelayGate = new TaskCompletionSource(); // a real wait would never finish
+        host.Failures.Enqueue(new HttpRequestException("No connection"));
+
+        await engine.HandlePcEvent(PcEvent.Sleeping).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(host.Delays);
+        Assert.Single(host.Commands);
+        Assert.Contains("No connection", automation.LastResult);
     }
 
     private static async Task WaitUntil(Func<bool> condition)

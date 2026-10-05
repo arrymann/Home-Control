@@ -27,8 +27,15 @@ public static class SolarCalculator
     private const double NauticalZenith = 102;
     private const double AstronomicalZenith = 108;
 
-    /// <summary>The event on a local calendar day in the given time zone.</summary>
-    public static DateTimeOffset? GetEvent(DateOnly localDate, GeoLocation location, SunEvent sunEvent, TimeZoneInfo zone)
+    /// <summary>The event on a local calendar day in the given time zone (the first, if there are two).</summary>
+    public static DateTimeOffset? GetEvent(DateOnly localDate, GeoLocation location, SunEvent sunEvent, TimeZoneInfo zone) =>
+        GetEvents(localDate, location, sunEvent, zone).Select(e => (DateTimeOffset?)e).FirstOrDefault();
+
+    /// <summary>
+    /// Every time the event happens on a local calendar day. Usually one; none on polar days or
+    /// nights; rarely two, when a twilight time drifts across midnight.
+    /// </summary>
+    public static IEnumerable<DateTimeOffset> GetEvents(DateOnly localDate, GeoLocation location, SunEvent sunEvent, TimeZoneInfo zone)
     {
         // The event of a UTC day can fall on the local day before or after; try all three.
         for (var shift = -1; shift <= 1; shift++)
@@ -43,12 +50,41 @@ public static class SolarCalculator
             var local = TimeZoneInfo.ConvertTime(utc, zone);
             if (DateOnly.FromDateTime(local.DateTime) == localDate)
             {
-                return local;
+                yield return local;
             }
         }
-
-        return null;
     }
+
+    /// <summary>The sun's altitude above the horizon in degrees (without refraction) at a moment.</summary>
+    public static double ElevationDegrees(DateTimeOffset time, GeoLocation location)
+    {
+        var utc = time.UtcDateTime;
+        var minutes = utc.TimeOfDay.TotalMinutes;
+        var t = JulianCentury(JulianDay(DateOnly.FromDateTime(utc)) + minutes / 1440.0);
+        var declination = Radians(SunDeclination(t));
+        var trueSolarMinutes = minutes + EquationOfTime(t) + 4 * location.Longitude;
+        var hourAngle = Radians(trueSolarMinutes / 4 - 180);
+        var lat = Radians(location.Latitude);
+        var cosZenith = Math.Sin(lat) * Math.Sin(declination) + Math.Cos(lat) * Math.Cos(declination) * Math.Cos(hourAngle);
+        return 90 - Degrees(Math.Acos(Math.Clamp(cosZenith, -1, 1)));
+    }
+
+    /// <summary>The sun's altitude (degrees) at which an event happens.</summary>
+    public static double EventAltitude(SunEvent sunEvent) => sunEvent switch
+    {
+        SunEvent.Sunrise or SunEvent.Sunset => 90 - SunriseZenith,
+        SunEvent.CivilDawn or SunEvent.CivilDusk => 90 - CivilZenith,
+        SunEvent.NauticalDawn or SunEvent.NauticalDusk => 90 - NauticalZenith,
+        SunEvent.AstronomicalDawn or SunEvent.AstronomicalDusk => 90 - AstronomicalZenith,
+        _ => 0,
+    };
+
+    /// <summary>Events when the sun goes down past an altitude (as opposed to coming up).</summary>
+    public static bool IsEvening(SunEvent sunEvent) =>
+        sunEvent is SunEvent.Sunset or SunEvent.CivilDusk or SunEvent.NauticalDusk or SunEvent.AstronomicalDusk;
+
+    public static bool IsMorning(SunEvent sunEvent) =>
+        sunEvent is SunEvent.Sunrise or SunEvent.CivilDawn or SunEvent.NauticalDawn or SunEvent.AstronomicalDawn;
 
     public static SunEvent ToSunEvent(TimeReference reference) => reference switch
     {

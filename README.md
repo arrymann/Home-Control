@@ -74,13 +74,15 @@ Each automation is a small graph. **Triggers** (when) start it, **conditions** (
 | **Everything off** | Action | Turn every device in the tray off |
 | **Wait** | Action | Wait before the next step |
 | **Notification** | Action | Show a Windows notification |
-| **PC power** | Action | Lock, sleep, turn the display off, or shut down or restart after a one-minute warning (cancel it with **Cancel shutdown** in the tray menu) |
+| **PC power** | Action | Lock, sleep, turn the display off, or shut down or restart after a one-minute warning (cancel it with **Cancel shutdown** in the tray menu). Apps with unsaved work can still ask before they close, as with a normal shutdown. |
 
 **Location.** Sun times are calculated on the PC (NOAA's equations, accurate to about a minute) for the location set on the Automations page. You can find a town by name, use Windows' location (if Location is turned on for desktop apps), or type coordinates. Searching sends the name you type to the free [Open-Meteo geocoding API](https://open-meteo.com/en/docs/geocoding-api); the location you pick is only stored on this PC. Where the sun doesn't rise or set on a day (polar day or night), those triggers don't fire that day.
 
-**At shutdown**, Home Control asks Windows to notify it early. While the shutdown automations run, Windows shows *“Home Control is switching devices before Windows shuts down”* for a few seconds; waits are skipped and the PC power action is ignored. Sleep and lock triggers run as the PC goes to sleep. Actions that fail because the network isn't back yet after waking up are retried twice.
+**At shutdown**, Home Control asks Windows to notify it early. While the shutdown automations run, Windows shows *“Home Control is switching devices before Windows shuts down”* for a few seconds; waits are skipped and the PC power action is ignored. *Goes to sleep* automations get about a second and a half, also without waits or retries; what hasn't finished by then is dropped rather than done after waking. *Wakes up* means someone woke the PC: wakes for updates or timers that go back to sleep unseen don't count. Actions that fail because the network isn't back yet after waking up are retried twice.
 
-**Missed times.** Time triggers fire while Home Control runs. One that was missed by more than two minutes, because the PC was asleep or the app wasn't running, is skipped rather than run late. Starting an automation again while it is still running (for example inside a *Wait*) restarts it. Automations are saved in `%LOCALAPPDATA%\HomeControl\automations.json`, and failures show a notification.
+**Polar day and night.** Where the sun doesn't set or rise on a day, a window such as *sunset to sunrise* follows where the sun actually is.
+
+**Missed times.** Time triggers fire while Home Control runs. One that was missed by more than two minutes, because the PC was asleep or the app wasn't running, is skipped rather than run late. Starting an automation again while it is still running (for example inside a *Wait*) restarts it; turning it off or deleting it stops it. Automations are saved in `%LOCALAPPDATA%\HomeControl\automations.json`, and failures show a notification.
 
 ## Building
 

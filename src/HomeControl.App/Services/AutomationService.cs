@@ -14,6 +14,7 @@ namespace HomeControl.Services;
 internal sealed class AutomationService : IDisposable
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(5);
+    private const int MaxParallelRequests = 4;
 
     private readonly AppHost _app;
     private readonly bool _readOnly;
@@ -23,6 +24,7 @@ internal sealed class AutomationService : IDisposable
     private readonly DispatcherQueueTimer _saveTimer;
     private readonly HashSet<string> _testRuns = [];
     private bool _started;
+    private long _zoneRefreshed = Environment.TickCount64;
 
     /// <param name="readOnly">Smoke test: nothing runs on its own and nothing is saved.</param>
     public AutomationService(AppHost app, MessageWindow window, HttpClient http, DispatcherQueue dispatcher, bool readOnly)
@@ -40,13 +42,7 @@ internal sealed class AutomationService : IDisposable
         Engine = new AutomationEngine(new Host(this), () => Document);
         Engine.RunCompleted += OnRunCompleted;
 
-        _pc.PcEventOccurred += (_, pcEvent) =>
-        {
-            if (_started)
-            {
-                Engine.HandlePcEvent(pcEvent);
-            }
-        };
+        _pc.PcEventOccurred = OnPcEvent;
         _pc.HasSessionEndingWork = signingOut => _started && Document.Automations.Any(a =>
             a.Enabled && a.Nodes.OfType<ShutdownTriggerNode>().Any(t => t.Kind == ShutdownKind.Any || (t.Kind == ShutdownKind.SignOut) == signingOut));
         _pc.SessionEnding = signingOut => Engine.RunShutdownTriggersAsync(signingOut, CancellationToken.None);
@@ -54,7 +50,7 @@ internal sealed class AutomationService : IDisposable
         _tickTimer = dispatcher.CreateTimer();
         _tickTimer.Interval = TickInterval;
         _tickTimer.IsRepeating = true;
-        _tickTimer.Tick += (_, _) => Engine.Tick();
+        _tickTimer.Tick += (_, _) => OnTick();
 
         _saveTimer = dispatcher.CreateTimer();
         _saveTimer.Interval = TimeSpan.FromSeconds(1);
@@ -84,6 +80,37 @@ internal sealed class AutomationService : IDisposable
         _started = true;
         Engine.Start();
         _tickTimer.Start();
+    }
+
+    private Task OnPcEvent(PcEvent pcEvent)
+    {
+        if (!_started)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (pcEvent != PcEvent.Sleeping)
+        {
+            return Engine.HandlePcEvent(pcEvent);
+        }
+
+        // Windows waits only briefly: what isn't done by then is dropped, not done after waking.
+        var cts = new CancellationTokenSource(PcMonitor.SleepMilliseconds);
+        var work = Engine.HandlePcEvent(pcEvent, cts.Token);
+        _ = work.ContinueWith(_ => cts.Dispose(), TaskScheduler.Default);
+        return work;
+    }
+
+    private void OnTick()
+    {
+        // In case a time zone change wasn't announced (WM_TIMECHANGE also clears it).
+        if (Environment.TickCount64 - _zoneRefreshed > 60_000)
+        {
+            _zoneRefreshed = Environment.TickCount64;
+            TimeZoneInfo.ClearCachedData();
+        }
+
+        Engine.Tick();
     }
 
     /// <summary>Saves soon (edits come in bursts, e.g. while dragging a node).</summary>
@@ -239,13 +266,47 @@ internal sealed class AutomationService : IDisposable
             var result = await App.Controller.SetPowerAsync(config, turnOn, cancellationToken);
             if (result.Success)
             {
-                App.Home.Find(deviceId)?.ApplyStatus(new DeviceStatus(result.IsOn ?? turnOn, true), Stopwatch.GetTimestamp());
+                App.Home.Find(deviceId)?.ApplyCommandResult(result.IsOn ?? turnOn);
             }
 
             return result;
         }
 
-        public Task TurnAllOffAsync(CancellationToken cancellationToken) => App.Home.TurnAllOffAsync();
+        /// <summary>Turns off every device in the tray, whatever its last known state (which may be old).</summary>
+        public async Task TurnAllOffAsync(CancellationToken cancellationToken)
+        {
+            var failures = new List<string>();
+            using var gate = new SemaphoreSlim(MaxParallelRequests);
+            await Task.WhenAll(App.Home.Devices.ToList().Select(async device =>
+            {
+                await gate.WaitAsync(cancellationToken);
+                try
+                {
+                    var result = await App.Controller.SetPowerAsync(device.Config, false, cancellationToken);
+                    if (result.Success)
+                    {
+                        device.ApplyCommandResult(result.IsOn ?? false);
+                    }
+                    else
+                    {
+                        failures.Add($"{device.Label}: {result.Message}");
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    failures.Add($"{device.Label}: {ex.Message}");
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }));
+
+            if (failures.Count > 0)
+            {
+                throw new InvalidOperationException(string.Join("; ", failures));
+            }
+        }
 
         public void Notify(string message) => App.ShowNotification("Home Control", message);
 

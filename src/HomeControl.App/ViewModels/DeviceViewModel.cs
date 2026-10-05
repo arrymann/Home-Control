@@ -164,6 +164,22 @@ public sealed class DeviceViewModel : BindableBase
         SyncToggle(_state ?? false);
     }
 
+    /// <summary>Shows the result of a command sent without the row (by an automation).</summary>
+    internal void ApplyCommandResult(bool isOn)
+    {
+        if (_isBusy)
+        {
+            return; // the row's own command reports when it finishes
+        }
+
+        _lastCommandEnded = Stopwatch.GetTimestamp(); // older reads mustn't undo this
+        _lastUpdated = DateTimeOffset.UtcNow;
+        IsOnline = true;
+        Error = null;
+        State = isOn;
+        SyncToggle(isOn);
+    }
+
     /// <summary>Flips the device (unknown state counts as off). Used by the global shortcut.</summary>
     public Task<DeviceCommandResult?> ToggleAsync() => SetPowerAsync(!(_state ?? false));
 

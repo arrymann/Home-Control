@@ -168,6 +168,7 @@ internal sealed class AppHost
         };
 
         _automations = new AutomationService(this, _messageWindow, _http, _dispatcher, readOnly: IsSmokeTest);
+        PcPower.ShutdownFailed += (_, message) => _trayIcon.ShowNotification("Home Control", message);
 
         ApplyAppearance();
         ApplyHotkeys();
@@ -590,15 +591,8 @@ internal sealed class AppHost
 
     private void CancelScheduledShutdown()
     {
-        try
-        {
-            PcPower.CancelShutdown();
-            _trayIcon.ShowNotification("Home Control", "The shutdown was cancelled.");
-        }
-        catch (Exception ex)
-        {
-            Log.Error("Cancelling the shutdown", ex);
-        }
+        PcPower.CancelShutdown();
+        _trayIcon.ShowNotification("Home Control", "The shutdown was cancelled.");
     }
 
     private void ApplyHotkeys()
