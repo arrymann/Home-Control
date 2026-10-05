@@ -18,6 +18,9 @@ internal sealed class MessageWindow : IDisposable
     /// <summary>Posted by a second instance of the app to open the popup.</summary>
     public const uint WM_SHOW_POPUP = WM_APP + 2;
 
+    /// <summary>Posted by "HomeControl.exe --exit" (the builder uses it before replacing the app's files).</summary>
+    public const uint WM_EXIT_APP = WM_APP + 3;
+
     private readonly WndProc _wndProc; // must stay referenced while the window exists
     private readonly IntPtr _instance;
 
@@ -65,6 +68,16 @@ internal sealed class MessageWindow : IDisposable
         GetWindowThreadProcessId(window, out var processId);
         AllowSetForegroundWindow(processId);
         PostMessageW(window, WM_SHOW_POPUP, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    /// <summary>Asks an already running instance to exit.</summary>
+    public static void SignalRunningInstanceToExit()
+    {
+        var window = FindWindowW(ClassName, null);
+        if (window != IntPtr.Zero)
+        {
+            PostMessageW(window, WM_EXIT_APP, IntPtr.Zero, IntPtr.Zero);
+        }
     }
 
     private IntPtr WindowProcedure(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam)

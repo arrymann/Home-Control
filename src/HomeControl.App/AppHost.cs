@@ -24,6 +24,7 @@ internal sealed class AppHost
     private readonly SettingsStore _settingsStore = new(AppPaths.SettingsFile);
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private DispatcherQueue _dispatcher = null!;
+    private bool _exited;
     private MessageWindow _messageWindow = null!;
     private TrayIcon _trayIcon = null!;
     private ThemeService _theme = null!;
@@ -360,6 +361,12 @@ internal sealed class AppHost
 
     public void Exit()
     {
+        if (_exited)
+        {
+            return; // e.g. "Exit" and an exit request at the same time
+        }
+
+        _exited = true;
         _pollTimer.Stop();
         _automations.Dispose();
         _signInWindow?.Close();
@@ -706,6 +713,11 @@ internal sealed class AppHost
             case MessageWindow.WM_SHOW_POPUP:
                 handled = true;
                 ShowPopupOrSetup();
+                break;
+            case MessageWindow.WM_EXIT_APP:
+                handled = true;
+                Log.Info("Asked to exit by another program.");
+                _dispatcher.TryEnqueue(Exit); // not while inside the message window's own procedure
                 break;
             case NativeMethods.WM_DPICHANGED:
             case NativeMethods.WM_DISPLAYCHANGE:

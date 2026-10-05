@@ -86,6 +86,18 @@ Each automation is a small graph. **Triggers** (when) start it, **conditions** (
 
 ## Building
 
+### Without typing anything
+
+In the Home Control folder, double-click **Build Home Control.cmd**. A window opens that:
+
+- checks for the .NET 10 SDK. If it's missing, **Set it up** installs it for your account (about 300 MB from Microsoft, no administrator rights needed);
+- builds the app for your PC's processor (x64 or ARM64);
+- puts it in `%LOCALAPPDATA%\Programs\Home Control`, or a folder you choose. It adds Home Control to the Start menu and starts it.
+
+Running it again later updates the app in place. If Home Control is running, the builder closes it first and starts the new one. Your settings and sign-in are kept. The first build downloads a few hundred MB of packages and takes several minutes; later builds are quicker. If Windows asks whether to run the file because it was downloaded, choose **Run** (or **More info › Run anyway**). The build output is saved in `%LOCALAPPDATA%\HomeControl\build.log`.
+
+### From the command line
+
 Requirements: Windows 10 1809 or later (Mica needs Windows 11), the .NET 10 SDK, and optionally Visual Studio 2022/2026 with the *WinUI application development* workload. Running it needs the Microsoft Edge WebView2 Runtime, which Windows 11 and up-to-date Windows 10 already include.
 
 Run these from the repository root, the folder that contains `HomeControl.sln` (not from `src`):
@@ -100,7 +112,7 @@ dotnet publish src/HomeControl.App -c Release -p:Platform=x64 -r win-x64 --self-
 .\publish\HomeControl.exe
 ```
 
-Use `-p:Platform=ARM64 -r win-arm64` for ARM devices. Every push also builds both architectures on GitHub Actions and attaches the published app to the run as an artifact. CI also launches the x64 build with `--smoke-test`. It opens the flyout and every settings page in light and dark theme, the automation editor with every kind of node, and the Google sign-in window. It runs a script in the hidden Google Home page and checks that a sync without a sign-in fails cleanly. It fails on any runtime error and uploads screenshots (the *Screenshots* artifact).
+Use `-p:Platform=ARM64 -r win-arm64` for ARM devices. Every push also builds both architectures on GitHub Actions and attaches the published app to the run as an artifact. CI also launches the x64 build with `--smoke-test`. It opens the flyout and every settings page in light and dark theme, the automation editor with every kind of node, and the Google sign-in window. It runs a script in the hidden Google Home page and checks that a sync without a sign-in fails cleanly. It fails on any runtime error and uploads screenshots (the *Screenshots* artifact). CI also runs the builder twice. Once it builds without its window. Once it builds through its window, which adds the Start menu shortcut and starts the app. A rebuild then has to close the running app, and `--exit` is checked.
 
 The core library is cross-platform and has unit tests. It holds the Google Home protocol and device sync, the Assistant client, Google sign-in, settings and shortcuts.
 
@@ -120,7 +132,7 @@ dotnet test tests/HomeControl.Core.Tests
 | Settings › Account | Google Home sign-in and sync; Google Assistant setup, fallback, language and command phrases |
 | Settings › General | Theme, window material, flyout shortcut, notifications, start with Windows |
 
-Starting `HomeControl.exe` a second time opens the flyout of the running instance. With `--background` (used by *Start with Windows*) it starts silently in the tray.
+Starting `HomeControl.exe` a second time opens the flyout of the running instance. With `--background` (used by *Start with Windows*) it starts silently in the tray. `HomeControl.exe --exit` closes the running instance (the builder uses this before it replaces the app's files).
 
 ### Assistant: other languages and special devices
 
@@ -141,5 +153,6 @@ src/HomeControl.App          WinUI 3 app: Win32 tray icon and hotkeys, flyout, s
 tests/HomeControl.Core.Tests xUnit tests, including sun times checked against an independent
                              implementation, sample Google Home responses and an in-process
                              fake Assistant gRPC server
+tools/builder                The window behind "Build Home Control.cmd" (Windows PowerShell + WPF)
 tools/generate_assets.py     Regenerates the icons from Fluent UI System Icons
 ```
