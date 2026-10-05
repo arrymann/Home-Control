@@ -7,6 +7,7 @@ A small WinUI 3 tray app for switching your Google Home devices on and off.
 - **Global shortcuts.** Give each device its own shortcut (for example `Ctrl + Alt + 1`), plus one that opens the flyout.
 - **Follows the Windows theme.** The tray icon matches the taskbar (white on a dark taskbar, black on a light one). The flyout and settings window follow the app light/dark mode and switch live when you change it.
 - **Mica.** Both windows use Mica by default. Mica Alt, Acrylic or a plain background can be picked in Settings › General.
+- **Automations.** A node-based editor (Settings › Automations) switches devices on their own: at a time of day or at sunrise, sunset and twilight for your location, when the PC is locked, wakes up or sits idle, or when Windows shuts down.
 - Optional notification after a shortcut toggles a device, and an option to start with Windows.
 
 ## How it talks to Google Home
@@ -56,6 +57,31 @@ Sign-in uses the standard installed-app OAuth flow: your browser, a loopback red
 
 > While the consent screen is in *Testing* mode, Google expires sign-ins after 7 days. To avoid that, set the app to *In production* on the consent screen; for your own account you can click through the "unverified app" warning. If commands don't work, turn on **Personal results** for your account in the Google Home app.
 
+## Automations
+
+Each automation is a small graph. **Triggers** (when) start it, **conditions** (if) choose a path through their *Yes* and *No* outputs, and **actions** (then) do the work. Wire nodes together by dragging from the dot on the right of one node to the dot on the left of the next. You can also drop a wire on an empty spot to add a connected node there. The editor has undo, zoom, and **Run now**, which runs the automation from a trigger and skips waits. Problems such as a missing device, a node that isn't connected, or sun times without a location are flagged on the nodes.
+
+| Node | Kind | What it does |
+|---|---|---|
+| **Time of day** | Trigger | A set time, or sunrise, sunset, dawn/dusk (civil twilight), nautical or astronomical twilight, or solar noon, with an offset (for example 15 min before sunset), on chosen days |
+| **PC event** | Trigger | The PC is locked or unlocked, goes to sleep or wakes up, has been idle for N minutes or you're back, the display turns off or on, or it switches to battery or is plugged in; also when Home Control starts |
+| **PC shutdown** | Trigger | Windows shuts down or restarts, or you sign out |
+| **Time window** | Condition | Between two times of day, which can be sun times and can wrap past midnight (for example sunset to sunrise) |
+| **Day of the week** | Condition | Only on some days |
+| **Device state** | Condition | A device is on or off |
+| **PC state** | Condition | Locked or unlocked, idle or in use, on battery or plugged in, display on or off |
+| **Device** | Action | Turn a device on or off, or toggle it |
+| **Everything off** | Action | Turn every device in the tray off |
+| **Wait** | Action | Wait before the next step |
+| **Notification** | Action | Show a Windows notification |
+| **PC power** | Action | Lock, sleep, turn the display off, or shut down or restart after a one-minute warning (cancel it with **Cancel shutdown** in the tray menu) |
+
+**Location.** Sun times are calculated on the PC (NOAA's equations, accurate to about a minute) for the location set on the Automations page. You can find a town by name, use Windows' location (if Location is turned on for desktop apps), or type coordinates. Searching sends the name you type to the free [Open-Meteo geocoding API](https://open-meteo.com/en/docs/geocoding-api); the location you pick is only stored on this PC. Where the sun doesn't rise or set on a day (polar day or night), those triggers don't fire that day.
+
+**At shutdown**, Home Control asks Windows to notify it early. While the shutdown automations run, Windows shows *“Home Control is switching devices before Windows shuts down”* for a few seconds; waits are skipped and the PC power action is ignored. Sleep and lock triggers run as the PC goes to sleep. Actions that fail because the network isn't back yet after waking up are retried twice.
+
+**Missed times.** Time triggers fire while Home Control runs. One that was missed by more than two minutes, because the PC was asleep or the app wasn't running, is skipped rather than run late. Starting an automation again while it is still running (for example inside a *Wait*) restarts it. Automations are saved in `%LOCALAPPDATA%\HomeControl\automations.json`, and failures show a notification.
+
 ## Building
 
 Requirements: Windows 10 1809 or later (Mica needs Windows 11), the .NET 10 SDK, and optionally Visual Studio 2022/2026 with the *WinUI application development* workload. Running it needs the Microsoft Edge WebView2 Runtime, which Windows 11 and up-to-date Windows 10 already include.
@@ -72,7 +98,7 @@ dotnet publish src/HomeControl.App -c Release -p:Platform=x64 -r win-x64 --self-
 .\publish\HomeControl.exe
 ```
 
-Use `-p:Platform=ARM64 -r win-arm64` for ARM devices. Every push also builds both architectures on GitHub Actions and attaches the published app to the run as an artifact. CI also launches the x64 build with `--smoke-test`. It opens the flyout and every settings page in light and dark theme, plus the Google sign-in window. It runs a script in the hidden Google Home page and checks that a sync without a sign-in fails cleanly. It fails on any runtime error and uploads screenshots (the *Screenshots* artifact).
+Use `-p:Platform=ARM64 -r win-arm64` for ARM devices. Every push also builds both architectures on GitHub Actions and attaches the published app to the run as an artifact. CI also launches the x64 build with `--smoke-test`. It opens the flyout and every settings page in light and dark theme, the automation editor with every kind of node, and the Google sign-in window. It runs a script in the hidden Google Home page and checks that a sync without a sign-in fails cleanly. It fails on any runtime error and uploads screenshots (the *Screenshots* artifact).
 
 The core library is cross-platform and has unit tests. It holds the Google Home protocol and device sync, the Assistant client, Google sign-in, settings and shortcuts.
 
@@ -88,6 +114,7 @@ dotnet test tests/HomeControl.Core.Tests
 | Right-click tray icon | Refresh device states, Turn all off, Sync devices, Settings, Exit |
 | Device shortcut | Toggles that device; a notification confirms it (can be turned off) |
 | Settings › Devices | Sync from Google Home, show or hide devices in the tray, rename, reorder, record shortcuts, **Try it** buttons; add Assistant devices by name |
+| Settings › Automations | Location, automation list and the node editor |
 | Settings › Account | Google Home sign-in and sync; Google Assistant setup, fallback, language and command phrases |
 | Settings › General | Theme, window material, flyout shortcut, notifications, start with Windows |
 
@@ -102,12 +129,15 @@ Settings live in `%LOCALAPPDATA%\HomeControl\settings.json`, next to a log file 
 ## Project layout
 
 ```
-src/HomeControl.Core         Cross-platform logic: Google Home protocol, device sync and routing,
+src/HomeControl.Core         Cross-platform logic: automations (node graph, sun times, scheduling,
+                             runner), Google Home protocol, device sync and routing,
                              OAuth (loopback + PKCE), Assistant gRPC client, settings and secret
                              store, shortcut model
 src/HomeControl.App          WinUI 3 app: Win32 tray icon and hotkeys, flyout, settings window,
-                             the WebView2 Google Home session and sign-in window
-tests/HomeControl.Core.Tests xUnit tests, including sample Google Home responses and an
-                             in-process fake Assistant gRPC server
+                             node editor, PC state/shutdown monitor, the WebView2 Google Home
+                             session and sign-in window
+tests/HomeControl.Core.Tests xUnit tests, including sun times checked against an independent
+                             implementation, sample Google Home responses and an in-process
+                             fake Assistant gRPC server
 tools/generate_assets.py     Regenerates the icons from Fluent UI System Icons
 ```
