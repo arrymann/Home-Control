@@ -44,5 +44,7 @@ internal static class AppPaths
 
     public static string SecretsFile => Path.Combine(DataDirectory, "secrets.dat");
 
+    public static string AutomationsFile => Path.Combine(DataDirectory, "automations.json");
+
     public static string Asset(string name) => Path.Combine(AppContext.BaseDirectory, "Assets", name);
 }

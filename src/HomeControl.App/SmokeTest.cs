@@ -1,3 +1,4 @@
+using HomeControl.Core.Automations;
 using HomeControl.Core.GoogleHome;
 using HomeControl.Core.Hotkeys;
 using HomeControl.Core.Models;
@@ -116,6 +117,55 @@ internal static class SmokeTest
             host.OpenSettings("account");
         }, () => host.SettingsWindowHandle);
         await Step("settings general light", () => host.OpenSettings("general"), () => host.SettingsWindowHandle);
+
+        // Automations: the list, and the editor with every kind of node.
+        var everything = new Automation { Name = "Every kind of node" };
+        AutomationNode[] everyNode =
+        [
+            new TimeTriggerNode { X = 40, Y = 40, At = new TimePoint { Reference = TimeReference.Sunset, OffsetMinutes = -15 } },
+            new PcEventTriggerNode { X = 40, Y = 360, Event = PcEvent.Idle },
+            new ShutdownTriggerNode { X = 40, Y = 600 },
+            new TimeWindowConditionNode { X = 380, Y = 40 },
+            new DaysConditionNode { X = 380, Y = 420 },
+            new DeviceStateConditionNode { X = 380, Y = 620, DeviceId = samples[1].Id },
+            new PcStateConditionNode { X = 720, Y = 620 },
+            new DeviceActionNode { X = 720, Y = 40, DeviceId = samples[1].Id },
+            new NotifyActionNode { X = 720, Y = 280, Message = "Good evening" },
+            new DelayActionNode { X = 1060, Y = 40 },
+            new AllOffActionNode { X = 1060, Y = 300 },
+            new PcPowerActionNode { X = 1060, Y = 480, Command = PcPowerCommand.ShutDown },
+        ];
+        everything.Nodes.AddRange(everyNode);
+        void Wire(int from, int to, string port = Ports.Then) => AutomationGraph.Connect(everything, everyNode[from].Id, port, everyNode[to].Id);
+        Wire(0, 3);
+        Wire(3, 7, Ports.Yes);
+        Wire(3, 8, Ports.No);
+        Wire(7, 9);
+        Wire(1, 4);
+        Wire(4, 10, Ports.Yes);
+        Wire(2, 10);
+        Wire(5, 11, Ports.Yes);
+        var automations = host.Automations.Document;
+        automations.Location = new GeoLocation(51.5074, -0.1278, "London, England, United Kingdom");
+        automations.Automations.Add(AutomationTemplates.Create(AutomationTemplate.LightsAtSunset, samples));
+        automations.Automations.Add(AutomationTemplates.Create(AutomationTemplate.OffAtShutdown, samples));
+        automations.Automations.Add(everything);
+        foreach (var automation in automations.Automations)
+        {
+            var issues = AutomationGraph.Validate(automation, samples.Select(d => d.Id).ToHashSet(), hasLocation: true)
+                .Where(i => i.Severity == IssueSeverity.Error && automation != everything);
+            errors.AddRange(issues.Select(i => $"Automation “{automation.Name}”: {i.Message}"));
+        }
+
+        await Step("settings automations dark", () =>
+        {
+            SetTheme(ThemePreference.Dark);
+            host.OpenSettings("automations");
+        }, () => host.SettingsWindowHandle, waitMs: 2000);
+        await Step("automation editor dark", () => host.OpenAutomation(everything.Id), () => host.SettingsWindowHandle, waitMs: 2500);
+        await Step("automation editor light", () => SetTheme(ThemePreference.Light), () => host.SettingsWindowHandle, waitMs: 1500);
+        await Step("automation template editor", () => host.OpenAutomation(automations.Automations[0].Id), () => host.SettingsWindowHandle, waitMs: 2000);
+        await Step("back to general", () => host.OpenSettings("general"), waitMs: 500);
 
         DeviceEditorDialog? dialog = null;
         foreach (var (name, device) in new[] { ("device dialog", samples[0]), ("device dialog assistant", samples[^1]) })

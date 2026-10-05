@@ -35,6 +35,7 @@ internal sealed class AppHost
     private GoogleHomeSession _googleHomeSession = null!;
     private GoogleHomeClient _googleHome = null!;
     private DispatcherQueueTimer _pollTimer = null!;
+    private AutomationService _automations = null!;
     private Task<GoogleHomeSyncResult>? _syncTask;
     private int _googleHomeSignOuts;
     private bool _syncFailed;
@@ -66,6 +67,8 @@ internal sealed class AppHost
     public string? GoogleHomeMessage { get; private set; }
 
     internal GoogleHomeSession GoogleHomeSession => _googleHomeSession;
+
+    internal AutomationService Automations => _automations;
 
     public HomeViewModel Home { get; private set; } = null!;
 
@@ -164,6 +167,8 @@ internal sealed class AppHost
             }
         };
 
+        _automations = new AutomationService(this, _messageWindow, _http, _dispatcher, readOnly: IsSmokeTest);
+
         ApplyAppearance();
         ApplyHotkeys();
         StartupService.RefreshPath();
@@ -173,11 +178,17 @@ internal sealed class AppHost
             _ = SyncQuietlyAsync();
         }
 
+        // Last, so "when Home Control starts" automations find everything ready.
+        _automations.Start();
+
         if (!background)
         {
             ShowPopupOrSetup();
         }
     }
+
+    /// <summary>A notification from the tray icon (respects Focus/quiet hours).</summary>
+    public void ShowNotification(string title, string text) => _trayIcon.ShowNotification(title, text);
 
     /// <summary>Saves settings and applies them everywhere.</summary>
     public void SaveSettings()
@@ -242,6 +253,13 @@ internal sealed class AppHost
         }
 
         _settingsWindow.Show(page);
+    }
+
+    /// <summary>Opens Settings › Automations with an automation in the editor.</summary>
+    internal void OpenAutomation(string automationId)
+    {
+        OpenSettings("automations");
+        AutomationsPage.Edit(automationId);
     }
 
     /// <summary>Opens the window where the user signs in to Google Home.</summary>
@@ -342,6 +360,7 @@ internal sealed class AppHost
     public void Exit()
     {
         _pollTimer.Stop();
+        _automations.Dispose();
         _signInWindow?.Close();
         _settingsWindow?.Close();
         _hotkeys.Dispose();
@@ -562,10 +581,24 @@ internal sealed class AppHost
                 },
                 enabled: _syncTask is null)
             .AddSeparator()
+            .AddIf(PcPower.ShutdownScheduled, "Cancel shutdown", CancelScheduledShutdown)
             .Add("Settings", () => OpenSettings())
             .AddSeparator()
             .Add("Exit", Exit)
             .Show(_messageWindow.Handle, point, openUpwards: taskbarAtBottom);
+    }
+
+    private void CancelScheduledShutdown()
+    {
+        try
+        {
+            PcPower.CancelShutdown();
+            _trayIcon.ShowNotification("Home Control", "The shutdown was cancelled.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Cancelling the shutdown", ex);
+        }
     }
 
     private void ApplyHotkeys()

@@ -14,6 +14,9 @@ internal sealed class ContextMenu
         return this;
     }
 
+    /// <summary>Adds the item only when <paramref name="condition"/> is true.</summary>
+    public ContextMenu AddIf(bool condition, string text, Action action) => condition ? Add(text, action) : this;
+
     public ContextMenu AddSeparator()
     {
         _items.Add((null, null, false, true));

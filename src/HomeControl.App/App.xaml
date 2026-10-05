@@ -27,6 +27,133 @@
             </Style>
 
             <x:Double x:Key="SettingsPageMaxWidth">1000</x:Double>
+
+            <!--
+                Automation editor. Node cards, ports and wires are built in code; their colours live
+                in these styles so they follow the app theme (ThemeResource in a style setter).
+            -->
+            <Style x:Key="NodeCanvasStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource SolidBackgroundFillColorBaseBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="8" />
+            </Style>
+            <Style x:Key="NodeCardStyle" TargetType="Border">
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Background" Value="{ThemeResource SolidBackgroundFillColorQuarternaryBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            </Style>
+            <Style
+                x:Key="NodeCardSelectedStyle"
+                BasedOn="{StaticResource NodeCardStyle}"
+                TargetType="Border">
+                <Setter Property="BorderThickness" Value="2" />
+                <Setter Property="BorderBrush" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+            </Style>
+            <Style x:Key="NodeHeaderStyle" TargetType="Border">
+                <Setter Property="CornerRadius" Value="8,8,0,0" />
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="0,0,0,1" />
+            </Style>
+            <Style x:Key="NodeTriggerBadgeStyle" TargetType="Border">
+                <Setter Property="Width" Value="26" />
+                <Setter Property="Height" Value="26" />
+                <Setter Property="CornerRadius" Value="13" />
+                <Setter Property="Background" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+            </Style>
+            <Style
+                x:Key="NodeConditionBadgeStyle"
+                BasedOn="{StaticResource NodeTriggerBadgeStyle}"
+                TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource SystemFillColorCautionBrush}" />
+            </Style>
+            <Style
+                x:Key="NodeActionBadgeStyle"
+                BasedOn="{StaticResource NodeTriggerBadgeStyle}"
+                TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource SystemFillColorSuccessBrush}" />
+            </Style>
+            <Style x:Key="NodeBadgeIconStyle" TargetType="FontIcon">
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="Foreground" Value="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+            </Style>
+            <Style x:Key="NodeIssueIconStyle" TargetType="FontIcon">
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="Glyph" Value="&#xE7BA;" />
+                <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCautionBrush}" />
+            </Style>
+            <Style
+                x:Key="NodeCaptionStyle"
+                BasedOn="{StaticResource CaptionTextBlockStyle}"
+                TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+            <Style
+                x:Key="NodeDeleteButtonStyle"
+                BasedOn="{StaticResource DefaultButtonStyle}"
+                TargetType="Button">
+                <Setter Property="Padding" Value="6" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+            </Style>
+            <Style x:Key="NodeTriggerPortStyle" TargetType="Ellipse">
+                <Setter Property="Width" Value="12" />
+                <Setter Property="Height" Value="12" />
+                <Setter Property="StrokeThickness" Value="2" />
+                <Setter Property="Fill" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+                <Setter Property="Stroke" Value="{ThemeResource SolidBackgroundFillColorQuarternaryBrush}" />
+            </Style>
+            <Style
+                x:Key="NodeConditionPortStyle"
+                BasedOn="{StaticResource NodeTriggerPortStyle}"
+                TargetType="Ellipse">
+                <Setter Property="Fill" Value="{ThemeResource SystemFillColorCautionBrush}" />
+            </Style>
+            <Style
+                x:Key="NodeActionPortStyle"
+                BasedOn="{StaticResource NodeTriggerPortStyle}"
+                TargetType="Ellipse">
+                <Setter Property="Fill" Value="{ThemeResource SystemFillColorSuccessBrush}" />
+            </Style>
+            <Style x:Key="WireStyle" TargetType="Path">
+                <Setter Property="StrokeThickness" Value="2" />
+                <Setter Property="Stroke" Value="{ThemeResource ControlStrongStrokeColorDefaultBrush}" />
+            </Style>
+            <Style
+                x:Key="WireYesStyle"
+                BasedOn="{StaticResource WireStyle}"
+                TargetType="Path">
+                <Setter Property="Stroke" Value="{ThemeResource SystemFillColorSuccessBrush}" />
+            </Style>
+            <Style
+                x:Key="WireNoStyle"
+                BasedOn="{StaticResource WireStyle}"
+                TargetType="Path">
+                <Setter Property="Stroke" Value="{ThemeResource SystemFillColorCriticalBrush}" />
+            </Style>
+            <Style
+                x:Key="WireSelectedStyle"
+                BasedOn="{StaticResource WireStyle}"
+                TargetType="Path">
+                <Setter Property="StrokeThickness" Value="3" />
+                <Setter Property="Stroke" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+            </Style>
+            <Style
+                x:Key="WirePreviewStyle"
+                BasedOn="{StaticResource WireStyle}"
+                TargetType="Path">
+                <Setter Property="Stroke" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+                <Setter Property="StrokeDashArray" Value="4,3" />
+            </Style>
+            <Style x:Key="NodeGridLineStyle" TargetType="Path">
+                <Setter Property="StrokeThickness" Value="1" />
+                <Setter Property="Stroke" Value="{ThemeResource DividerStrokeColorDefaultBrush}" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

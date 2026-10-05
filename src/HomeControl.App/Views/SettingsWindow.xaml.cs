@@ -30,7 +30,7 @@ public sealed partial class SettingsWindow : Window
         TitleBarIcon.Source = new BitmapImage(new Uri(AppPaths.Asset("AppIcon.png")));
 
         var scale = NativeMethods.GetDpiForWindow(_hwnd) / 96.0;
-        var size = new SizeInt32((int)(1000 * scale), (int)(740 * scale));
+        var size = new SizeInt32((int)(1100 * scale), (int)(780 * scale)); // room for the automation editor
         var work = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         size.Width = Math.Min(size.Width, work.Width);
         size.Height = Math.Min(size.Height, work.Height);
@@ -107,6 +107,7 @@ public sealed partial class SettingsWindow : Window
         var pageType = page switch
         {
             "account" => typeof(AccountPage),
+            "automations" => typeof(AutomationsPage),
             "general" => typeof(GeneralPage),
             _ => typeof(DevicesPage),
         };
