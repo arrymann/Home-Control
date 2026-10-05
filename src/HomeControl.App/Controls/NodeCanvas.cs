@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
 using Windows.System;
+using Path = Microsoft.UI.Xaml.Shapes.Path;
 
 namespace HomeControl.Controls;
 
