@@ -502,6 +502,13 @@ function Set-Status([string] $Title, [string] $Text, [string] $Kind) {
     $Ui.StatusText.Text = $Text
     $Ui.StatusText.Visibility = if ($Text) { 'Visible' } else { 'Collapsed' }
     $Ui.StatusCard.Visibility = 'Visible'
+    Show-InView $Ui.StatusCard
+}
+
+# Scrolls an element into view (on small screens the window scrolls).
+function Show-InView($Element) {
+    $Ui.Root.UpdateLayout()
+    $Element.BringIntoView()
 }
 
 # A message box over the builder's window (Windows Forms' one has the current Windows look).
@@ -758,7 +765,7 @@ function Read-BuildLine([string] $Line) {
     elseif ($Line -match '^\s*HomeControl\.Core\s+->') {
         $stage = 'Compiling the app' + $Ellipsis
     }
-    elseif ($Line -match '^\s*HomeControl\s+->') {
+    elseif ($Line -match '^\s*HomeControl\.App\s+->') {
         $stage = 'Copying the app to its folder' + $Ellipsis
     }
     if ($stage -and $stage -ne $Job.StageText) {
@@ -1284,7 +1291,15 @@ $WindowXaml = @'
   </Window.Resources>
 
   <Border x:Name="Root" Background="@Bg@">
-    <StackPanel Margin="28,24,28,24">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+
+      <!-- Scrolls on small screens; the buttons below stay in view. -->
+      <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+    <StackPanel Margin="28,24,28,4">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto" />
@@ -1358,7 +1373,7 @@ $WindowXaml = @'
           <ProgressBar x:Name="Progress" Height="4" Margin="0,14,0,0" IsIndeterminate="True"
                        Foreground="@Accent@" Background="@Track@" BorderThickness="0" />
           <Button x:Name="DetailsButton" Style="{StaticResource LinkButton}" Content="Show details" HorizontalAlignment="Left" Margin="0,12,0,0" />
-          <TextBox x:Name="LogBox" Style="{StaticResource Input}" Visibility="Collapsed" Margin="0,8,0,0" Height="220"
+          <TextBox x:Name="LogBox" Style="{StaticResource Input}" Visibility="Collapsed" Margin="0,8,0,0" Height="200"
                    IsReadOnly="True" IsReadOnlyCaretVisible="True" FontFamily="Cascadia Mono, Consolas" FontSize="12"
                    TextWrapping="NoWrap" VerticalContentAlignment="Stretch"
                    VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
@@ -1366,7 +1381,10 @@ $WindowXaml = @'
         </StackPanel>
       </Border>
 
-      <Grid Margin="0,20,0,0">
+    </StackPanel>
+      </ScrollViewer>
+
+      <Grid Grid.Row="1" Margin="28,16,28,24">
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
           <Button x:Name="OpenFolderButton" Style="{StaticResource Button}" Content="Open folder" Visibility="Collapsed" />
           <Button x:Name="RunButton" Style="{StaticResource Button}" Content="Start Home Control" Margin="8,0,0,0" Visibility="Collapsed" />
@@ -1376,7 +1394,7 @@ $WindowXaml = @'
           <Button x:Name="CloseButton" Style="{StaticResource Button}" Content="Close" Margin="8,0,0,0" />
         </StackPanel>
       </Grid>
-    </StackPanel>
+    </Grid>
   </Border>
 </Window>
 '@
@@ -1392,6 +1410,17 @@ function Flush-Output {
 function Show-Details([bool] $Show) {
     $Ui.LogBox.Visibility = if ($Show) { 'Visible' } else { 'Collapsed' }
     $Ui.DetailsButton.Content = if ($Show) { 'Hide details' } else { 'Show details' }
+    if ($Show) { Show-InView $Ui.LogBox }
+}
+
+# The window grows as the status and details appear: keep it within the screen.
+function Limit-WindowToScreen {
+    $area = [System.Windows.SystemParameters]::WorkArea
+    $window = $Ui.Window
+    $window.MaxHeight = $area.Height
+    if ($window.Top + $window.ActualHeight -gt $area.Bottom) {
+        $window.Top = [Math]::Max($area.Top, $area.Bottom - $window.ActualHeight)
+    }
 }
 
 function Select-Folder {
@@ -1532,7 +1561,7 @@ try {
 
     $Ui = @{ Window = $window; Handle = [IntPtr]::Zero; Pending = New-Object Text.StringBuilder; ShowingError = $false }
     foreach ($name in @(
-            'Root', 'Logo', 'SdkIcon', 'SdkTitle', 'SdkText', 'SdkLinkText', 'SdkLink', 'InstallSdkButton',
+            'Root', 'Scroller', 'Logo', 'SdkIcon', 'SdkTitle', 'SdkText', 'SdkLinkText', 'SdkLink', 'InstallSdkButton',
             'OptionsCard', 'X64Option', 'Arm64Option', 'PlatformHint', 'DestinationBox', 'BrowseButton',
             'ShortcutOption', 'StartOption', 'StatusCard', 'StatusIcon', 'StatusTitle', 'StatusText',
             'Progress', 'DetailsButton', 'LogBox', 'OpenFolderButton', 'RunButton', 'BuildButton', 'CloseButton')) {
@@ -1565,6 +1594,9 @@ try {
                 [HomeControlBuilder.Native]::SetDarkTitleBar($Ui.Handle, [bool]$Theme.Dark)
             }
         })
+
+    $window.MaxHeight = [System.Windows.SystemParameters]::WorkArea.Height
+    $window.Add_SizeChanged({ Invoke-Safely { Limit-WindowToScreen } })
 
     $window.Add_ContentRendered({
             Invoke-Safely {
