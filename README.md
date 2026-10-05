@@ -60,6 +60,8 @@ Sign-in uses the standard installed-app OAuth flow: your browser, a loopback red
 
 Requirements: Windows 10 1809 or later (Mica needs Windows 11), the .NET 10 SDK, and optionally Visual Studio 2022/2026 with the *WinUI application development* workload. Running it needs the Microsoft Edge WebView2 Runtime, which Windows 11 and up-to-date Windows 10 already include.
 
+Run these from the repository root, the folder that contains `HomeControl.sln` (not from `src`):
+
 ```powershell
 # run from source
 dotnet build src/HomeControl.App -p:Platform=x64
@@ -67,6 +69,7 @@ dotnet build src/HomeControl.App -p:Platform=x64
 
 # self-contained build you can copy anywhere (no .NET or Windows App SDK install needed)
 dotnet publish src/HomeControl.App -c Release -p:Platform=x64 -r win-x64 --self-contained -o publish
+.\publish\HomeControl.exe
 ```
 
 Use `-p:Platform=ARM64 -r win-arm64` for ARM devices. Every push also builds both architectures on GitHub Actions and attaches the published app to the run as an artifact. CI also launches the x64 build with `--smoke-test`. It opens the flyout and every settings page in light and dark theme, plus the Google sign-in window. It runs a script in the hidden Google Home page and checks that a sync without a sign-in fails cleanly. It fails on any runtime error and uploads screenshots (the *Screenshots* artifact).
