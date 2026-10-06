@@ -132,15 +132,46 @@ public class FoyerCodecTests
     }
 
     [Theory]
-    [InlineData(0, true)]   // as captured from home.google.com: a normal on/off device
-    [InlineData(1, null)]   // the integration can't report on/off: the value isn't a state
-    public void The_command_only_attribute_decides_whether_on_off_is_a_state(int commandOnly, bool? isOn)
+    [InlineData(0)] // as captured from home.google.com: a normal on/off device
+    [InlineData(1)] // the integration can't be asked: the value is what Google last knew
+    public void Reads_the_command_only_attribute(int commandOnly)
     {
         var json = $$"""[[[["d1"],[["deviceStatus",[["online",[null,null,null,1]],["onlineStateDetails",[null,null,"stateOnline"]]]],["onOff",[["onOff",[null,null,null,1]]],[[["commandOnlyOnOff",[null,null,null,{{commandOnly}}]]]]]]]]]""";
 
         var state = Assert.Single(FoyerCodec.ParseTraits(json));
 
-        Assert.Equal(new GoogleHomeDeviceState("d1", true, isOn, null) { CommandOnly = commandOnly == 1 }, state);
+        Assert.Equal(new GoogleHomeDeviceState("d1", true, true, null) { CommandOnly = commandOnly == 1 }, state);
+    }
+
+    [Fact]
+    public void Merged_records_take_the_error_and_command_only_flag_from_the_records_that_count()
+    {
+        // Offline with an error through one integration, unknown through the other: not offline, no error.
+        var split = FoyerCodec.ParseTraits("""
+            [[
+              [["tv",["maker","p1"]],[["deviceStatus",[["online",[null,null,null,0]],["error",[null,null,"deviceOffline"]]]]]],
+              [["tv",["cast","p2"]],[["onOff",[["onOff",[null,null,null,1]]]]]]
+            ]]
+            """);
+        Assert.Equal(new GoogleHomeDeviceState("tv", null, true, null), Assert.Single(split));
+
+        // Status in one record, command-only on/off in the other: still command-only.
+        var commandOnly = FoyerCodec.ParseTraits("""
+            [[
+              [["tv"],[["deviceStatus",[["online",[null,null,null,1]]]]]],
+              [["tv"],[["onOff",[["onOff",[null,null,null,0]]],[[["commandOnlyOnOff",[null,null,null,1]]]]]]]
+            ]]
+            """);
+        Assert.Equal(new GoogleHomeDeviceState("tv", true, false, null) { CommandOnly = true }, Assert.Single(commandOnly));
+
+        // A record that reports on/off wins over a command-only one.
+        var reporting = FoyerCodec.ParseTraits("""
+            [[
+              [["tv"],[["onOff",[["onOff",[null,null,null,0]]],[[["commandOnlyOnOff",[null,null,null,1]]]]]]],
+              [["tv"],[["onOff",[["onOff",[null,null,null,1]]]]]]
+            ]]
+            """);
+        Assert.Equal(new GoogleHomeDeviceState("tv", null, true, null), Assert.Single(reporting));
     }
 
     [Theory]
@@ -383,19 +414,18 @@ public class GoogleHomeDeviceControllerTests
     }
 
     [Fact]
-    public async Task A_device_that_cant_report_on_off_is_switched_without_waiting()
+    public async Task A_command_only_device_is_switched_without_waiting()
     {
+        // The echo still has the old value; the device can't be asked, so taking the command is all.
         var reply = """[[[["d1"],[["deviceStatus",[["online",[null,null,null,1]]]],["onOff",[["onOff",[null,null,null,0]]],[[["commandOnlyOnOff",[null,null,null,1]]]]]]]]]""";
         var transport = new FakeFoyerTransport((_, _, _) => new FoyerResponse(200, reply));
         var controller = new GoogleHomeDeviceController(new GoogleHomeClient(transport));
 
         var command = await controller.SetPowerAsync(Desk(), true, default);
-        var batch = await controller.ReadStatesAsync([Desk()], default);
 
         Assert.True(command.Confirms(true));
         Assert.Equal("Sent “turn on” to Desk.", command.Message);
-        Assert.Single(transport.Calls, c => c.Method == "UpdateTraits");
-        Assert.Equal(new DeviceStatus(null, true), batch.Values.Single()); // its last command stays shown
+        Assert.Single(transport.Calls); // no read-back
     }
 
     [Fact]

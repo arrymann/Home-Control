@@ -30,8 +30,11 @@ public sealed class SceneViewModel : BindableBase
 
     public DeviceKind Kind => _config.Kind;
 
-    /// <summary>On while any of its devices is on (unknown counts as off).</summary>
-    public bool? State => SceneConfig.StateOf(_members.Where(m => m.IsOnline).Select(m => m.EffectiveState));
+    /// <summary>
+    /// On while any of its devices is on (unknown counts as off). A device Google lists as offline
+    /// counts by its on/off value, as its row shows it (Google lists some TVs that are on as offline).
+    /// </summary>
+    public bool? State => SceneConfig.StateOf(_members.Select(m => m.EffectiveState));
 
     /// <summary>Bound two-way to the toggle switch: the user flipping it switches every device.</summary>
     public bool IsOn
@@ -72,7 +75,7 @@ public sealed class SceneViewModel : BindableBase
                 return _error;
             }
 
-            var on = _members.Count(m => m.IsOnline && m.EffectiveState == true);
+            var on = _members.Count(m => m.EffectiveState == true);
             var count = _members.Count switch
             {
                 0 => "No devices",

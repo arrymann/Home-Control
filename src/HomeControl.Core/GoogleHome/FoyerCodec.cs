@@ -42,8 +42,9 @@ public sealed record GoogleHomeGraph(IReadOnlyList<GoogleHomeHome> Homes, IReadO
 public sealed record GoogleHomeDeviceState(string Id, bool? Online, bool? IsOn, string? Error)
 {
     /// <summary>
-    /// The device takes on/off commands but doesn't report whether it is on (its integration sets
-    /// the <c>commandOnlyOnOff</c> attribute); <see cref="IsOn"/> is then null.
+    /// The device takes on/off commands but can't be asked whether it is on (its integration sets
+    /// the <c>commandOnlyOnOff</c> attribute): <see cref="IsOn"/> is what Google last knew, and a
+    /// command can't be confirmed by reading the device back.
     /// </summary>
     public bool CommandOnly { get; init; }
 }
@@ -195,15 +196,16 @@ public static class FoyerCodec
     /// <remarks>
     /// <para>
     /// A trait is <c>[name, [[field, wrapper], …], attributes]</c>; the attributes are a protobuf
-    /// Struct, <c>[[[key, wrapper], …]]</c>. When the on/off trait has <c>commandOnlyOnOff</c>,
-    /// its value isn't a reported state, so it is ignored.
+    /// Struct, <c>[[[key, wrapper], …]]</c>. The on/off trait's <c>commandOnlyOnOff</c> attribute
+    /// sets <see cref="GoogleHomeDeviceState.CommandOnly"/>.
     /// </para>
     /// <para>
     /// Nobody has seen one device come back as several records (one per integration, say a TV's
     /// Chromecast built-in and its maker's cloud) or with a trait twice, but the format allows
     /// it. Such records are merged by the rule of Google's Home APIs
     /// (<c>HasConnectivityState</c>): online when any record is, offline when all are, unknown
-    /// otherwise; the on/off value comes from a record that isn't offline when there is one.
+    /// otherwise. The on/off value and the error come from records that aren't offline unless
+    /// all are, preferring a record that reports on/off over a command-only one.
     /// </para>
     /// </remarks>
     public static IReadOnlyList<GoogleHomeDeviceState> ParseTraits(string json)
@@ -262,7 +264,7 @@ public static class FoyerCodec
                 }
             }
 
-            states.Add(new GoogleHomeDeviceState(id, online, commandOnly ? null : isOn, error ?? challenge) { CommandOnly = commandOnly });
+            states.Add(new GoogleHomeDeviceState(id, online, isOn, error ?? challenge) { CommandOnly = commandOnly });
         }
 
         return states.GroupBy(s => s.Id, StringComparer.Ordinal).Select(Merge).ToList();
@@ -279,11 +281,15 @@ public static class FoyerCodec
         var online = records.Any(r => r.Online == true) ? true
             : records.All(r => r.Online == false) ? false
             : (bool?)null;
-        var reachable = records.Where(r => r.Online != false).ToList();
+        var all = records.OrderBy(r => r.CommandOnly).ToList(); // stable: reporting records first
+        var reachable = all.Where(r => r.Online != false).ToList();
         var isOn = reachable.Select(r => r.IsOn).FirstOrDefault(v => v.HasValue)
-                   ?? records.Select(r => r.IsOn).FirstOrDefault(v => v.HasValue);
-        var error = (online == true ? reachable : records.ToList()).Select(r => r.Error).FirstOrDefault(e => e is not null);
-        return new GoogleHomeDeviceState(records.Key, online, isOn, error) { CommandOnly = records.All(r => r.CommandOnly) };
+                   ?? all.Select(r => r.IsOn).FirstOrDefault(v => v.HasValue);
+        var error = (online == false ? all : reachable).Select(r => r.Error).FirstOrDefault(e => e is not null);
+
+        // Command-only when a record says so and no other record reports on/off.
+        var commandOnly = all.Any(r => r.CommandOnly) && all.All(r => r.CommandOnly || r.IsOn is null);
+        return new GoogleHomeDeviceState(records.Key, online, isOn, error) { CommandOnly = commandOnly };
     }
 
     /// <summary>The raw JSON of each device's records in a <c>GetTraits</c>/<c>UpdateTraits</c> response (for diagnostics).</summary>
