@@ -700,9 +700,9 @@ internal sealed class AppHost
             return;
         }
 
-        var text = result.Success
-            ? $"Turned {(device.State == true ? "on" : "off")}"
-            : $"Couldn't change it: {result.Message}";
+        var text = !result.Success ? $"Couldn't change it: {result.Message}"
+            : device.IsPending ? $"Turning {(device.EffectiveState == true ? "on" : "off")}…"
+            : $"Turned {(device.State == true ? "on" : "off")}";
         _trayIcon.ShowNotification(device.Label, text);
     }
 

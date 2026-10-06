@@ -377,7 +377,7 @@ public sealed class HomeViewModel : BindableBase
 
     /// <summary>Turns every device off (devices already known to be off are skipped).</summary>
     public Task TurnAllOffAsync() =>
-        RunLimitedAsync(Devices.Where(d => d.State != false).ToList(), d => d.SetPowerAsync(false));
+        RunLimitedAsync(Devices.Where(d => d.State != false && d.IsOnline).ToList(), d => d.SetPowerAsync(false));
 
     internal void OnDeviceStateChanged() => OnPropertyChanged(nameof(Summary));
 

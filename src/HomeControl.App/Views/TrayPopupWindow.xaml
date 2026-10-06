@@ -299,6 +299,7 @@
                                         IsOn="{x:Bind IsOn, Mode=TwoWay}"
                                         OffContent=""
                                         OnContent=""
+                                        Opacity="{x:Bind ToggleOpacity, Mode=OneWay}"
                                         Visibility="{x:Bind helpers:Ui.Collapsed(IsBusy), Mode=OneWay}" />
                                 </Grid>
                             </Grid>

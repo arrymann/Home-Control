@@ -114,7 +114,7 @@ public sealed class DeviceViewModel : BindableBase
         {
             if (SetProperty(ref _isPending, value))
             {
-                OnPropertyChanged(nameof(CanToggle));
+                OnPropertyChanged(nameof(ToggleOpacity));
                 OnPropertyChanged(nameof(PendingText));
             }
         }
@@ -126,7 +126,14 @@ public sealed class DeviceViewModel : BindableBase
     /// <summary>Tooltip while <see cref="IsPending"/>.</summary>
     public string? PendingText => _isPending ? $"Waiting for {Label} to turn {(_pendingTarget ? "on" : "off")}…" : null;
 
-    public bool CanToggle => !_isBusy && !_isPending;
+    /// <summary>
+    /// The toggle works during <see cref="IsPending"/> too (it is only dimmed): a TV that ignored
+    /// the first command can be sent another one right away.
+    /// </summary>
+    public bool CanToggle => !_isBusy;
+
+    /// <summary>The toggle's opacity: dimmed while waiting for the device to confirm.</summary>
+    public double ToggleOpacity => _isPending ? 0.45 : 1.0;
 
     public string? Error
     {
@@ -190,9 +197,11 @@ public sealed class DeviceViewModel : BindableBase
 
         if (_isPending)
         {
-            if (status.Online && status.IsOn != _pendingTarget)
+            // Not caught up yet (VerifyAsync keeps asking). Offline only settles a "turn off":
+            // a TV waking up can be offline for a moment.
+            if (status.Online ? status.IsOn != _pendingTarget : _pendingTarget)
             {
-                return; // not caught up yet; VerifyAsync keeps asking
+                return;
             }
 
             StopVerifying();
@@ -205,7 +214,9 @@ public sealed class DeviceViewModel : BindableBase
             Error = null;
         }
 
-        State = status.IsOn;
+        // Offline: unknown (Google only keeps the last value). Online but without an on/off value
+        // (some TVs never report one): keep what is known, e.g. from the last command.
+        State = !status.Online ? null : status.IsOn ?? _state;
         SyncToggle(_state ?? false);
     }
 
@@ -237,8 +248,8 @@ public sealed class DeviceViewModel : BindableBase
         SyncToggle(turnOn);
     }
 
-    /// <summary>Flips the device (unknown state counts as off). Used by the global shortcut.</summary>
-    public Task<DeviceCommandResult?> ToggleAsync() => SetPowerAsync(_isPending ? !_pendingTarget : !(_state ?? false));
+    /// <summary>Flips the device from what its row shows. Used by the global shortcut.</summary>
+    public Task<DeviceCommandResult?> ToggleAsync() => SetPowerAsync(!(_isPending ? _pendingTarget : _state ?? _isOn));
 
     public async Task<DeviceCommandResult?> SetPowerAsync(bool turnOn)
     {
@@ -391,13 +402,21 @@ public sealed class DeviceViewModel : BindableBase
                     continue;
                 }
 
-                reported = status.IsOn ?? reported;
                 if (!status.Online)
                 {
-                    offline = true; // it can't act on the command now
-                    break;
+                    // Its on/off value is only Google's last record. Gone offline after
+                    // "turn off": that is off (many TVs leave the network in standby).
+                    offline = true;
+                    if (!target)
+                    {
+                        break;
+                    }
+
+                    continue; // waking up: it can be offline for a moment
                 }
 
+                offline = false;
+                reported = status.IsOn;
                 if (status.IsOn == target)
                 {
                     break;
@@ -431,10 +450,15 @@ public sealed class DeviceViewModel : BindableBase
         _verify = null;
         IsPending = false;
         _lastCommandEnded = Stopwatch.GetTimestamp(); // reads sent meanwhile mustn't undo this
-        _lastUpdated = DateTimeOffset.UtcNow;
+        if (reported is not null)
+        {
+            _lastUpdated = DateTimeOffset.UtcNow;
+        }
+
+        // Offline: unknown. A device that never reports on/off: assume the command worked.
         IsOnline = !offline;
-        State = reported;
-        SyncToggle(reported ?? target);
+        State = offline ? null : reported ?? target;
+        SyncToggle(_state ?? false);
     }
 
     /// <summary>

@@ -296,6 +296,23 @@ public class GoogleHomeDeviceControllerTests
     }
 
     [Fact]
+    public async Task An_offline_device_has_no_state_even_if_google_still_has_one()
+    {
+        // A TV that left the network in standby: Google still says "on" next to online=false.
+        var transport = new FakeFoyerTransport((_, _, _) => new FoyerResponse(200, Fixtures.Traits(("d1", false, true))));
+        var controller = new GoogleHomeDeviceController(new GoogleHomeClient(transport));
+
+        var command = await controller.SetPowerAsync(Desk(), false, default);
+        var query = await controller.QueryPowerAsync(Desk(), default);
+        var batch = await controller.ReadStatesAsync([Desk()], default);
+
+        Assert.False(command.Success);
+        Assert.Null(command.IsOn);
+        Assert.Null(query.IsOn);
+        Assert.Equal(new DeviceStatus(null, false), batch.Values.Single());
+    }
+
+    [Fact]
     public async Task A_command_that_needs_a_confirmation_is_a_failure()
     {
         // The partner gates on/off behind an acknowledgement: nothing was switched.
@@ -324,7 +341,7 @@ public class GoogleHomeDeviceControllerTests
 
         Assert.Single(transport.Calls);
         Assert.Equal(new DeviceStatus(true, true), states[desk.Id]);
-        Assert.Equal(new DeviceStatus(false, false), states[pc.Id]);
+        Assert.Equal(new DeviceStatus(null, false), states[pc.Id]); // offline: its on/off is only a stale record
         Assert.False(states.ContainsKey(assistantOnly.Id));
         Assert.True(controller.CanReadInBatch(desk));
         Assert.False(controller.CanReadInBatch(assistantOnly));
