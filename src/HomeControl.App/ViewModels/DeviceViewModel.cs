@@ -197,11 +197,9 @@ public sealed class DeviceViewModel : BindableBase
 
         if (_isPending)
         {
-            // Not caught up yet (VerifyAsync keeps asking). Offline only settles a "turn off":
-            // a TV waking up can be offline for a moment.
-            if (status.Online ? status.IsOn != _pendingTarget : _pendingTarget)
+            if (status.IsOn != _pendingTarget)
             {
-                return;
+                return; // not caught up yet; VerifyAsync keeps asking
             }
 
             StopVerifying();
@@ -214,9 +212,10 @@ public sealed class DeviceViewModel : BindableBase
             Error = null;
         }
 
-        // Offline: unknown (Google only keeps the last value). Online but without an on/off value
-        // (some TVs never report one): keep what is known, e.g. from the last command.
-        State = !status.Online ? null : status.IsOn ?? _state;
+        // Google's on/off value counts even when it lists the device as offline: it does that for
+        // some TVs that are on (the Google Home app shows them on). Without a value, an online
+        // device keeps what is known (some TVs never report one), an offline one is unknown.
+        State = status.IsOn ?? (status.Online ? _state : null);
         SyncToggle(_state ?? false);
     }
 
@@ -402,24 +401,16 @@ public sealed class DeviceViewModel : BindableBase
                     continue;
                 }
 
-                if (!status.Online)
+                // The on/off value decides; the online flag is only shown (Google can list a TV
+                // that is on as offline).
+                offline = !status.Online;
+                if (status.IsOn is { } isOn)
                 {
-                    // Its on/off value is only Google's last record. Gone offline after
-                    // "turn off": that is off (many TVs leave the network in standby).
-                    offline = true;
-                    if (!target)
+                    reported = isOn;
+                    if (isOn == target)
                     {
                         break;
                     }
-
-                    continue; // waking up: it can be offline for a moment
-                }
-
-                offline = false;
-                reported = status.IsOn;
-                if (status.IsOn == target)
-                {
-                    break;
                 }
             }
             catch (OperationCanceledException) when (verify.IsCancellationRequested)
@@ -437,14 +428,10 @@ public sealed class DeviceViewModel : BindableBase
             return;
         }
 
-        // Confirmed, offline, or it gave up: show what the device last said (still unknown: what was asked).
-        if (offline)
+        // Confirmed, or it gave up: show what the device last said.
+        if (reported != target)
         {
-            Log.Info($"{Label} is offline after “turn {(target ? "on" : "off")}”.");
-        }
-        else if (reported != target)
-        {
-            Log.Info($"{Label}: still reports {StateText(reported)} after “turn {(target ? "on" : "off")}”.");
+            Log.Info($"{Label}: still reports {StateText(reported)}{(offline ? " (Google lists it as offline)" : "")} after “turn {(target ? "on" : "off")}”.");
         }
 
         _verify = null;
@@ -455,9 +442,9 @@ public sealed class DeviceViewModel : BindableBase
             _lastUpdated = DateTimeOffset.UtcNow;
         }
 
-        // Offline: unknown. A device that never reports on/off: assume the command worked.
+        // A device that never reports on/off: assume the command worked (it was accepted).
         IsOnline = !offline;
-        State = offline ? null : reported ?? target;
+        State = reported ?? target;
         SyncToggle(_state ?? false);
     }
 

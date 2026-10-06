@@ -19,16 +19,11 @@ public sealed class GoogleHomeDeviceController : IDeviceController, IBatchStateR
         var state = await _client.SetOnOffAsync(id, device.AgentId, device.PartnerDeviceId, turnOn, cancellationToken)
             .ConfigureAwait(false);
 
-        // An offline device's on/off value is only Google's last record (a TV that dropped off the
-        // network in standby can still say "on"), so it counts as unknown.
+        // An explicit error means it wasn't carried out. The online flag alone doesn't: Google
+        // can list a TV as offline while it is on (the Google Home app shows it on).
         if (state?.Error is { } error)
         {
             return new DeviceCommandResult(false, error is "deviceOffline" or "offline" ? null : state.IsOn, DescribeError(error));
-        }
-
-        if (state is { Online: false })
-        {
-            return new DeviceCommandResult(false, null, $"{device.Label.Trim()} is offline.");
         }
 
         // What the device reports right after the command. Slow devices may still report their
@@ -51,7 +46,7 @@ public sealed class GoogleHomeDeviceController : IDeviceController, IBatchStateR
         }
 
         return state.Online == false
-            ? new DeviceCommandResult(true, null, $"{device.Label.Trim()} is offline.")
+            ? new DeviceCommandResult(true, state.IsOn, $"Google Home lists {device.Label.Trim()} as offline.")
             : new DeviceCommandResult(true, state.IsOn, state.IsOn switch { true => "On", false => "Off", null => "Unknown" });
     }
 
@@ -75,8 +70,7 @@ public sealed class GoogleHomeDeviceController : IDeviceController, IBatchStateR
             {
                 foreach (var config in configs)
                 {
-                    var online = state.Online != false;
-                    result[config.Id] = new DeviceStatus(online ? state.IsOn : null, online); // offline: only a stale record
+                    result[config.Id] = new DeviceStatus(state.IsOn, state.Online != false);
                 }
             }
         }

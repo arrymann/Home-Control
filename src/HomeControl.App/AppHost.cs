@@ -118,7 +118,7 @@ internal sealed class AppHost
 
         _googleHomeSession = new GoogleHomeSession(_dispatcher, _messageWindow.Handle, () => Settings.GoogleHome);
         _googleHomeSession.StateChanged += (_, _) => OnGoogleHomeStateChanged();
-        _googleHome = new GoogleHomeClient(_googleHomeSession);
+        _googleHome = new GoogleHomeClient(_googleHomeSession) { Trace = Log.Info };
 
         _assistant = new AssistantClient(Account, () => Settings.Assistant);
         Controller = new CompositeDeviceController(

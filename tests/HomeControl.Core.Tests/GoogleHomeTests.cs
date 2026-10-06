@@ -296,20 +296,45 @@ public class GoogleHomeDeviceControllerTests
     }
 
     [Fact]
-    public async Task An_offline_device_has_no_state_even_if_google_still_has_one()
+    public async Task Googles_on_off_value_counts_even_when_it_lists_the_device_offline()
     {
-        // A TV that left the network in standby: Google still says "on" next to online=false.
+        // Google can list a TV that is on as offline (the Google Home app shows it on).
         var transport = new FakeFoyerTransport((_, _, _) => new FoyerResponse(200, Fixtures.Traits(("d1", false, true))));
-        var controller = new GoogleHomeDeviceController(new GoogleHomeClient(transport));
+        var traced = new List<string>();
+        var controller = new GoogleHomeDeviceController(new GoogleHomeClient(transport) { Trace = traced.Add });
 
-        var command = await controller.SetPowerAsync(Desk(), false, default);
+        var command = await controller.SetPowerAsync(Desk(), true, default);
         var query = await controller.QueryPowerAsync(Desk(), default);
         var batch = await controller.ReadStatesAsync([Desk()], default);
 
-        Assert.False(command.Success);
-        Assert.Null(command.IsOn);
-        Assert.Null(query.IsOn);
-        Assert.Equal(new DeviceStatus(null, false), batch.Values.Single());
+        Assert.True(command.Success); // no error: the command was accepted
+        Assert.True(command.Confirms(true));
+        Assert.True(query.IsOn);
+        Assert.Equal(new DeviceStatus(true, false), batch.Values.Single());
+        var line = Assert.Single(traced); // logged once, not on every read
+        Assert.Contains("online=False", line);
+        Assert.Contains("\"deviceStatus\"", line);
+    }
+
+    [Fact]
+    public void Several_records_for_one_device_are_merged_like_the_google_home_app()
+    {
+        // A TV known through two integrations: the maker's cloud says offline, the Chromecast says on.
+        var body = """
+            [[
+              [["tv",["maker","p1"]],[["deviceStatus",[["online",[null,null,null,0]],["error",[null,null,"deviceOffline"]]]],["onOff",[["onOff",[null,null,null,0]]]]]],
+              [["tv",["cast","p2"]],[["deviceStatus",[["online",[null,null,null,1]]]],["onOff",[["onOff",[null,null,null,1]]]]]],
+              [["lamp"],[["deviceStatus",[["online",[null,null,null,0]]]],["deviceStatus",[["online",[null,null,null,1]]]],["onOff",[["onOff",[null,null,null,0]]]]]]
+            ]]
+            """;
+
+        var states = FoyerCodec.ParseTraits(body);
+
+        Assert.Equal(2, states.Count);
+        Assert.Equal(new GoogleHomeDeviceState("tv", true, true, null), states[0]);
+        Assert.Equal(new GoogleHomeDeviceState("lamp", true, false, null), states[1]); // a trait twice: online wins
+        Assert.Contains("\"maker\"", FoyerCodec.RawTraitsById(body)["tv"]);
+        Assert.Contains("\"cast\"", FoyerCodec.RawTraitsById(body)["tv"]);
     }
 
     [Fact]
@@ -341,7 +366,7 @@ public class GoogleHomeDeviceControllerTests
 
         Assert.Single(transport.Calls);
         Assert.Equal(new DeviceStatus(true, true), states[desk.Id]);
-        Assert.Equal(new DeviceStatus(null, false), states[pc.Id]); // offline: its on/off is only a stale record
+        Assert.Equal(new DeviceStatus(false, false), states[pc.Id]);
         Assert.False(states.ContainsKey(assistantOnly.Id));
         Assert.True(controller.CanReadInBatch(desk));
         Assert.False(controller.CanReadInBatch(assistantOnly));

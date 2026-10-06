@@ -184,6 +184,12 @@ public static class FoyerCodec
     /// Parses a <c>GetTraits</c> or <c>UpdateTraits</c> response:
     /// <c>[[ [[id],[[traitName,[[field,wrapper],…]],…]], … ]]</c>.
     /// </summary>
+    /// <remarks>
+    /// One device can come back as several records (one per integration, e.g. a TV's Chromecast
+    /// built-in and its maker's cloud), or with a trait more than once. They are merged as the
+    /// Google Home app shows them: online if any record is online, and the on/off value from an
+    /// online record when there is one.
+    /// </remarks>
     public static IReadOnlyList<GoogleHomeDeviceState> ParseTraits(string json)
     {
         using var document = JsonDocument.Parse(StripXssiPrefix(json));
@@ -206,9 +212,9 @@ public static class FoyerCodec
                 switch (Str(At(trait, 0)))
                 {
                     case "deviceStatus":
-                        if (fields.TryGetValue("online", out var onlineWrapper))
+                        if (fields.TryGetValue("online", out var onlineWrapper) && online != true)
                         {
-                            online = Bool(onlineWrapper);
+                            online = Bool(onlineWrapper) ?? online;
                         }
 
                         if (fields.TryGetValue("error", out var errorWrapper))
@@ -227,7 +233,7 @@ public static class FoyerCodec
                     case "onOff":
                         if (fields.TryGetValue("onOff", out var onOffWrapper))
                         {
-                            isOn = Bool(onOffWrapper);
+                            isOn ??= Bool(onOffWrapper);
                         }
 
                         break;
@@ -237,7 +243,43 @@ public static class FoyerCodec
             states.Add(new GoogleHomeDeviceState(id, online, isOn, error ?? challenge));
         }
 
-        return states;
+        return states.GroupBy(s => s.Id, StringComparer.Ordinal).Select(Merge).ToList();
+    }
+
+    /// <summary>Merges the records of one device (see <see cref="ParseTraits"/>).</summary>
+    private static GoogleHomeDeviceState Merge(IGrouping<string, GoogleHomeDeviceState> records)
+    {
+        if (records.Skip(1).FirstOrDefault() is null)
+        {
+            return records.First();
+        }
+
+        var online = records.Any(r => r.Online == true) ? true
+            : records.Any(r => r.Online == false) ? false
+            : (bool?)null;
+        var reachable = records.Where(r => r.Online != false).ToList();
+        var isOn = reachable.Select(r => r.IsOn).FirstOrDefault(v => v.HasValue)
+                   ?? records.Select(r => r.IsOn).FirstOrDefault(v => v.HasValue);
+        var error = (online == true ? reachable : records.ToList()).Select(r => r.Error).FirstOrDefault(e => e is not null);
+        return new GoogleHomeDeviceState(records.Key, online, isOn, error);
+    }
+
+    /// <summary>The raw JSON of each device's records in a <c>GetTraits</c>/<c>UpdateTraits</c> response (for diagnostics).</summary>
+    public static IReadOnlyDictionary<string, string> RawTraitsById(string json)
+    {
+        using var document = JsonDocument.Parse(StripXssiPrefix(json));
+        var raw = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var result in Items(At(document.RootElement, 0)))
+        {
+            var idNode = At(result, 0);
+            var id = idNode is { ValueKind: JsonValueKind.Array } ? Str(At(idNode, 0)) : Str(idNode);
+            if (id is not null)
+            {
+                raw[id] = raw.TryGetValue(id, out var earlier) ? earlier + " " + result.GetRawText() : result.GetRawText();
+            }
+        }
+
+        return raw;
     }
 
     /// <summary>Reads an RPC error body such as <c>[3,"Invalid argument"]</c>.</summary>

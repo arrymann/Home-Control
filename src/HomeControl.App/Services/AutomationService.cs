@@ -232,7 +232,7 @@ internal sealed class AutomationService : IDisposable
                 if (states.TryGetValue(deviceId, out var status))
                 {
                     device?.ApplyStatus(status, started);
-                    return status.Online ? status.IsOn : null;
+                    return status.IsOn;
                 }
 
                 return null;

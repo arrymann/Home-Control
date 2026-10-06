@@ -49,11 +49,18 @@ public sealed class GoogleHomeClient
     private const int RpcPermissionDenied = 7;
 
     private readonly IFoyerTransport _transport;
+    private readonly Dictionary<string, string> _traced = new(StringComparer.Ordinal);
 
     public GoogleHomeClient(IFoyerTransport transport)
     {
         _transport = transport;
     }
+
+    /// <summary>
+    /// Gets the raw records of devices Google reports as offline or with an error, once per
+    /// change, so a wrong reading can be looked into (the app writes them to its log).
+    /// </summary>
+    public Action<string>? Trace { get; set; }
 
     public async Task<GoogleHomeGraph> GetHomeGraphAsync(CancellationToken cancellationToken)
     {
@@ -69,7 +76,9 @@ public sealed class GoogleHomeClient
         {
             var body = await CallAsync(FoyerCodec.HomeControlService, FoyerCodec.GetTraitsMethod, FoyerCodec.BuildGetTraits(chunk), cancellationToken)
                 .ConfigureAwait(false);
-            states.AddRange(Parse(() => FoyerCodec.ParseTraits(body)));
+            var parsed = Parse(() => FoyerCodec.ParseTraits(body));
+            TraceUnusual(body, parsed);
+            states.AddRange(parsed);
         }
 
         return states;
@@ -83,7 +92,9 @@ public sealed class GoogleHomeClient
         var body = await CallAsync(FoyerCodec.HomeControlService, FoyerCodec.UpdateTraitsMethod, request, cancellationToken)
             .ConfigureAwait(false);
 
-        var echoed = Parse(() => FoyerCodec.ParseTraits(body)).FirstOrDefault(s => s.Id == deviceId);
+        var echoes = Parse(() => FoyerCodec.ParseTraits(body));
+        TraceUnusual(body, echoes);
+        var echoed = echoes.FirstOrDefault(s => s.Id == deviceId);
         if (echoed is { IsOn: not null } or { Error: not null })
         {
             return echoed;
@@ -91,6 +102,39 @@ public sealed class GoogleHomeClient
 
         var readBack = await GetStatesAsync([deviceId], cancellationToken).ConfigureAwait(false);
         return readBack.FirstOrDefault(s => s.Id == deviceId) ?? echoed;
+    }
+
+    private void TraceUnusual(string body, IReadOnlyList<GoogleHomeDeviceState> states)
+    {
+        if (Trace is not { } trace || !states.Any(s => s.Online == false || s.Error is not null))
+        {
+            return;
+        }
+
+        try
+        {
+            var raw = FoyerCodec.RawTraitsById(body);
+            foreach (var state in states.Where(s => s.Online == false || s.Error is not null))
+            {
+                var record = raw.GetValueOrDefault(state.Id, "?");
+                record = record.Length <= 4000 ? record : record[..4000] + "…";
+                lock (_traced)
+                {
+                    if (_traced.TryGetValue(state.Id, out var last) && last == record)
+                    {
+                        continue;
+                    }
+
+                    _traced[state.Id] = record;
+                }
+
+                trace($"Google Home device {state.Id}: online={state.Online?.ToString() ?? "?"}, on={state.IsOn?.ToString() ?? "?"}, error={state.Error ?? "none"}. Raw: {record}");
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Diagnostics only.
+        }
     }
 
     private async Task<string> CallAsync(string service, string method, string request, CancellationToken cancellationToken)
