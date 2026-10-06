@@ -47,7 +47,7 @@ public sealed class HomeViewModel : BindableBase
 
     internal IDeviceController Controller { get; }
 
-    private IBatchStateReader? BatchReader => Controller as IBatchStateReader;
+    internal IBatchStateReader? BatchReader => Controller as IBatchStateReader;
 
     /// <summary>Devices shown in the popup (hidden and missing devices are left out).</summary>
     public ObservableCollection<DeviceViewModel> Devices { get; } = [];

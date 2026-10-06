@@ -26,12 +26,12 @@ public sealed class DeviceViewModel : BindableBase
     private long _lastCommandEnded;
 
     /// <summary>
-    /// When a device hasn't confirmed a command, it is asked again after these waits: about 15
-    /// seconds in all, so a command that didn't take (a TV asleep too deeply) can soon be sent
-    /// again. Later changes show up with the flyout's regular refresh.
+    /// When a device hasn't confirmed a command, it is asked again after these waits: about a
+    /// minute in all, as TVs can take that long to report a change. A device that goes offline
+    /// ends the wait at once.
     /// </summary>
     private static readonly TimeSpan[] VerifyDelays =
-        [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(6)];
+        [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(25)];
 
     internal DeviceViewModel(HomeViewModel owner, DeviceConfig config)
     {
@@ -368,28 +368,39 @@ public sealed class DeviceViewModel : BindableBase
         IsPending = false;
     }
 
-    /// <summary>Asks the device for its state a few times until it reports the requested one.</summary>
+    /// <summary>
+    /// Reads the device until it reports the requested state, goes offline, or the time is up.
+    /// </summary>
     private async Task VerifyAsync(bool target, CancellationTokenSource verify)
     {
         bool? reported = null;
+        var offline = false;
         foreach (var delay in VerifyDelays)
         {
             try
             {
                 await Task.Delay(delay, verify.Token);
-                var result = await _owner.Controller.QueryPowerAsync(_config, verify.Token);
+                var status = await ReadStatusAsync(verify.Token);
                 if (verify.IsCancellationRequested)
                 {
                     return;
                 }
 
-                if (result.Success && result.IsOn is { } isOn)
+                if (status is null)
                 {
-                    reported = isOn;
-                    if (isOn == target)
-                    {
-                        break;
-                    }
+                    continue;
+                }
+
+                reported = status.IsOn ?? reported;
+                if (!status.Online)
+                {
+                    offline = true; // it can't act on the command now
+                    break;
+                }
+
+                if (status.IsOn == target)
+                {
+                    break;
                 }
             }
             catch (OperationCanceledException) when (verify.IsCancellationRequested)
@@ -407,8 +418,12 @@ public sealed class DeviceViewModel : BindableBase
             return;
         }
 
-        // Confirmed, or it gave up: show what the device last said (still unknown: what was asked).
-        if (reported != target)
+        // Confirmed, offline, or it gave up: show what the device last said (still unknown: what was asked).
+        if (offline)
+        {
+            Log.Info($"{Label} is offline after “turn {(target ? "on" : "off")}”.");
+        }
+        else if (reported != target)
         {
             Log.Info($"{Label}: still reports {StateText(reported)} after “turn {(target ? "on" : "off")}”.");
         }
@@ -417,8 +432,25 @@ public sealed class DeviceViewModel : BindableBase
         IsPending = false;
         _lastCommandEnded = Stopwatch.GetTimestamp(); // reads sent meanwhile mustn't undo this
         _lastUpdated = DateTimeOffset.UtcNow;
+        IsOnline = !offline;
         State = reported;
         SyncToggle(reported ?? target);
+    }
+
+    /// <summary>
+    /// The device's live state. Google Home devices are read like the flyout reads them, which
+    /// also says whether the device is online; others are asked (Assistant).
+    /// </summary>
+    private async Task<DeviceStatus?> ReadStatusAsync(CancellationToken cancellationToken)
+    {
+        if (_owner.BatchReader is { } reader && reader.CanReadInBatch(_config))
+        {
+            var states = await reader.ReadStatesAsync([_config], cancellationToken);
+            return states.TryGetValue(Id, out var status) ? status : null;
+        }
+
+        var result = await _owner.Controller.QueryPowerAsync(_config, cancellationToken);
+        return result.Success ? new DeviceStatus(result.IsOn, true) : null;
     }
 
     private void SyncToggle(bool value)
