@@ -104,6 +104,55 @@ public class SettingsStoreTests
         Assert.Equal(AssistantSettings.DefaultOnTemplate, settings.Assistant.OnCommandTemplate);
         Assert.Equal("en-US", settings.Assistant.LanguageCode);
     }
+
+    [Fact]
+    public void Scenes_round_trip_and_are_repaired()
+    {
+        using var dir = new TempDirectory();
+        var path = dir.File("settings.json");
+        File.WriteAllText(path, """
+            {
+              "devices": [ { "id": "d1", "name": "A" } ],
+              "scenes": [
+                { "id": "s", "name": "Evening", "kind": "Light", "deviceIds": [ "d1", "d1", "", "d2" ], "showInTray": false, "hotkey": "Ctrl+Alt+E" },
+                { "id": "s", "hotkey": "nonsense" },
+                null
+              ]
+            }
+            """);
+
+        var store = new SettingsStore(path);
+        var settings = store.Load();
+
+        Assert.Equal(2, settings.Scenes.Count);
+        var evening = settings.Scenes[0];
+        Assert.Equal("Evening", evening.Name);
+        Assert.Equal(DeviceKind.Light, evening.Kind);
+        Assert.Equal(["d1", "d2"], evening.DeviceIds);
+        Assert.False(evening.ShowInTray);
+        Assert.Equal(Hotkey.Parse("Ctrl+Alt+E"), evening.Hotkey);
+        Assert.NotEqual("s", settings.Scenes[1].Id);
+        Assert.Equal(string.Empty, settings.Scenes[1].Name);
+        Assert.Null(settings.Scenes[1].Hotkey);
+        Assert.True(settings.Scenes[1].ShowInTray);
+
+        store.Save(settings);
+        var again = store.Load();
+        Assert.Equal(["d1", "d2"], again.Scenes[0].DeviceIds);
+        Assert.Equal(settings.Scenes[1].Id, again.Scenes[1].Id);
+    }
+
+    [Theory]
+    [InlineData(new[] { 0, 0 }, false)]
+    [InlineData(new[] { 0, 1 }, true)]   // on while any device is on
+    [InlineData(new[] { 0, 2 }, false)]  // unknown devices don't count
+    [InlineData(new[] { 2, 2 }, null)]   // nothing known
+    [InlineData(new int[0], null)]
+    public void A_scene_is_on_while_any_device_is_on(int[] states, bool? expected)
+    {
+        bool? State(int s) => s switch { 0 => false, 1 => true, _ => null };
+        Assert.Equal(expected, SceneConfig.StateOf(states.Select(State)));
+    }
 }
 
 public class SecretStoreTests

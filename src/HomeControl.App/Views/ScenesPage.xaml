@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="HomeControl.Views.ScenesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:helpers="using:HomeControl.Helpers"
+    xmlns:local="using:HomeControl.Views"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
+
+    <Page.Resources>
+        <!-- Disabled icon buttons (Move up on the first scene...) stay borderless. -->
+        <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
+        <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="Transparent" />
+    </Page.Resources>
+
+    <ScrollViewer>
+        <StackPanel
+            MaxWidth="{StaticResource SettingsPageMaxWidth}"
+            Margin="36,24,36,36"
+            Spacing="4">
+            <TextBlock
+                Margin="0,0,0,8"
+                Style="{StaticResource TitleTextBlockStyle}"
+                Text="Scenes" />
+            <TextBlock
+                Margin="0,0,0,16"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="Group devices under one toggle. Turning a scene on turns all its devices on, and turning it off turns them all off. A scene shows as on while any of its devices is on. Pin it to the tray, give it a shortcut, or both."
+                TextWrapping="Wrap" />
+
+            <toolkit:SettingsCard
+                Click="OnNewClick"
+                Description="Pick the devices to switch together."
+                Header="New scene"
+                IsClickEnabled="True">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <FontIcon Glyph="&#xE710;" />
+                </toolkit:SettingsCard.HeaderIcon>
+            </toolkit:SettingsCard>
+
+            <TextBlock
+                x:Name="ListHeader"
+                Style="{StaticResource SettingsSectionHeaderStyle}"
+                Text="Your scenes" />
+            <ItemsControl x:Name="SceneList" IsTabStop="False">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Spacing="4" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:SceneListItem">
+                        <toolkit:SettingsCard Description="{x:Bind Description}" Header="{x:Bind Name}">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <PathIcon Data="{x:Bind helpers:Ui.DeviceIcon(Kind)}" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <StackPanel Orientation="Horizontal" Spacing="2">
+                                <ToggleSwitch
+                                    MinWidth="0"
+                                    Margin="0,0,8,0"
+                                    AutomationProperties.Name="Show in the tray"
+                                    IsOn="{x:Bind ShowInTray}"
+                                    OffContent=""
+                                    OnContent=""
+                                    Toggled="OnShowInTrayToggled"
+                                    ToolTipService.ToolTip="Show in the tray" />
+                                <Button
+                                    AutomationProperties.Name="Move up"
+                                    Click="OnMoveUpClick"
+                                    IsEnabled="{x:Bind CanMoveUp}"
+                                    Style="{StaticResource IconButtonStyle}"
+                                    ToolTipService.ToolTip="Move up (the order in the tray)">
+                                    <FontIcon FontSize="14" Glyph="&#xE74A;" />
+                                </Button>
+                                <Button
+                                    AutomationProperties.Name="Move down"
+                                    Click="OnMoveDownClick"
+                                    IsEnabled="{x:Bind CanMoveDown}"
+                                    Style="{StaticResource IconButtonStyle}"
+                                    ToolTipService.ToolTip="Move down (the order in the tray)">
+                                    <FontIcon FontSize="14" Glyph="&#xE74B;" />
+                                </Button>
+                                <Button
+                                    AutomationProperties.Name="Edit"
+                                    Click="OnEditClick"
+                                    Style="{StaticResource IconButtonStyle}"
+                                    ToolTipService.ToolTip="Edit">
+                                    <FontIcon FontSize="14" Glyph="&#xE70F;" />
+                                </Button>
+                                <Button
+                                    AutomationProperties.Name="Delete"
+                                    Click="OnDeleteClick"
+                                    Style="{StaticResource IconButtonStyle}"
+                                    ToolTipService.ToolTip="Delete">
+                                    <FontIcon FontSize="14" Glyph="&#xE74D;" />
+                                </Button>
+                            </StackPanel>
+                        </toolkit:SettingsCard>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock
+                x:Name="EmptyText"
+                Margin="1,8,0,0"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="No scenes yet. Click “New scene” above to group some devices."
+                TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

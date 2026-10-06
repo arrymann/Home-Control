@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="HomeControl.Views.SceneEditorDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:HomeControl.Controls"
+    xmlns:local="using:HomeControl.Views"
+    CloseButtonText="Cancel"
+    DefaultButton="Primary"
+    PrimaryButtonClick="OnPrimaryButtonClick"
+    PrimaryButtonText="Save"
+    Style="{StaticResource DefaultContentDialogStyle}">
+
+    <StackPanel MinWidth="440" Spacing="16">
+        <TextBox
+            x:Name="NameBox"
+            Header="Name"
+            PlaceholderText="e.g. Movie time"
+            TextChanged="OnNameChanged" />
+
+        <ComboBox
+            x:Name="KindBox"
+            HorizontalAlignment="Stretch"
+            Header="Icon">
+            <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="local:KindOption">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Viewbox Width="16" Height="16">
+                            <PathIcon Data="{x:Bind Icon}" />
+                        </Viewbox>
+                        <TextBlock Text="{x:Bind Name}" />
+                    </StackPanel>
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <StackPanel Spacing="8">
+            <TextBlock Text="Devices" />
+            <Border
+                Padding="12,4"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource ControlCornerRadius}">
+                <ScrollViewer MaxHeight="240">
+                    <ItemsControl x:Name="DeviceChoices" IsTabStop="False">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="local:SceneDeviceChoice">
+                                <CheckBox
+                                    Checked="OnDeviceChoiceChanged"
+                                    IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
+                                    Unchecked="OnDeviceChoiceChanged">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <Viewbox
+                                            Width="16"
+                                            Height="16"
+                                            VerticalAlignment="Center">
+                                            <PathIcon Data="{x:Bind Icon}" />
+                                        </Viewbox>
+                                        <TextBlock VerticalAlignment="Center" Text="{x:Bind Label}" />
+                                        <TextBlock
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            Text="{x:Bind Place}" />
+                                    </StackPanel>
+                                </CheckBox>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+        </StackPanel>
+
+        <StackPanel Spacing="8">
+            <TextBlock Text="Shortcut" />
+            <controls:ShortcutRecorder x:Name="ShortcutBox" />
+        </StackPanel>
+
+        <ToggleSwitch
+            x:Name="ShowInTrayBox"
+            Header="Show in the tray"
+            OffContent="Only with the shortcut"
+            OnContent="In the tray flyout" />
+
+        <TextBlock
+            x:Name="ErrorText"
+            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+            TextWrapping="Wrap"
+            Visibility="Collapsed" />
+    </StackPanel>
+</ContentDialog>

@@ -133,6 +133,94 @@
                 HorizontalScrollMode="Disabled"
                 VerticalScrollBarVisibility="Auto"
                 Visibility="{x:Bind helpers:Ui.Visible(ViewModel.ShowDevices), Mode=OneWay}">
+                <StackPanel>
+                <!-- Scenes (Settings › Scenes): one toggle for a group of devices -->
+                <TextBlock
+                    Margin="4,0,0,6"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="Scenes"
+                    Visibility="{x:Bind helpers:Ui.Visible(ViewModel.HasScenes), Mode=OneWay}" />
+                <ItemsControl IsTabStop="False" ItemsSource="{x:Bind ViewModel.Scenes}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="4" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SceneViewModel">
+                            <Grid
+                                MinHeight="60"
+                                Padding="12,8,0,8"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1"
+                                ColumnSpacing="12"
+                                CornerRadius="{StaticResource OverlayCornerRadius}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <Grid Width="36" Height="36" VerticalAlignment="Center">
+                                    <Ellipse Fill="{ThemeResource ControlAltFillColorTertiaryBrush}" />
+                                    <Ellipse Fill="{ThemeResource AccentFillColorDefaultBrush}" Visibility="{x:Bind helpers:Ui.Visible(IsOn), Mode=OneWay}" />
+                                    <Viewbox
+                                        Width="18"
+                                        Height="18"
+                                        Visibility="{x:Bind helpers:Ui.Collapsed(IsOn), Mode=OneWay}">
+                                        <PathIcon Data="{x:Bind helpers:Ui.DeviceIcon(Kind), Mode=OneWay}" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                    </Viewbox>
+                                    <Viewbox
+                                        Width="18"
+                                        Height="18"
+                                        Visibility="{x:Bind helpers:Ui.Visible(IsOn), Mode=OneWay}">
+                                        <PathIcon Data="{x:Bind helpers:Ui.DeviceIconOn(Kind), Mode=OneWay}" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+                                    </Viewbox>
+                                </Grid>
+
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyTextBlockStyle}"
+                                        Text="{x:Bind Label, Mode=OneWay}"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="NoWrap" />
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Subtitle, Mode=OneWay}"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="NoWrap"
+                                        ToolTipService.ToolTip="{x:Bind Subtitle, Mode=OneWay}" />
+                                </StackPanel>
+
+                                <Grid Grid.Column="2" VerticalAlignment="Center">
+                                    <ProgressRing
+                                        Width="16"
+                                        Height="16"
+                                        Margin="0,0,16,0"
+                                        HorizontalAlignment="Right"
+                                        IsActive="{x:Bind IsBusy, Mode=OneWay}" />
+                                    <ToggleSwitch
+                                        MinWidth="0"
+                                        AutomationProperties.Name="{x:Bind Label, Mode=OneWay}"
+                                        IsEnabled="{x:Bind CanToggle, Mode=OneWay}"
+                                        IsOn="{x:Bind IsOn, Mode=TwoWay}"
+                                        OffContent=""
+                                        OnContent=""
+                                        Visibility="{x:Bind helpers:Ui.Collapsed(IsBusy), Mode=OneWay}" />
+                                </Grid>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock
+                    Margin="4,12,0,6"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="Devices"
+                    Visibility="{x:Bind helpers:Ui.Visible(ViewModel.HasScenes), Mode=OneWay}" />
                 <ItemsControl IsTabStop="False" ItemsSource="{x:Bind ViewModel.Devices}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -217,6 +305,7 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                </StackPanel>
             </ScrollViewer>
 
             <!-- Footer, like the Quick Settings flyout -->

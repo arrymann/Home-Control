@@ -7,6 +7,7 @@ A small WinUI 3 tray app for switching your Google Home devices on and off.
 - **Global shortcuts.** Give each device its own shortcut (for example `Ctrl + Alt + 1`), plus one that opens the flyout.
 - **Follows the Windows theme.** The tray icon matches the taskbar (white on a dark taskbar, black on a light one). The flyout and settings window follow the app light/dark mode and switch live when you change it.
 - **Mica.** Both windows use Mica by default. Mica Alt, Acrylic or a plain background can be picked in Settings › General.
+- **Scenes.** Group devices under one toggle in the tray (Settings › Scenes), with an optional shortcut.
 - **Automations.** A node-based editor (Settings › Automations) switches devices on their own: at a time of day or at sunrise, sunset and twilight for your location, when the PC is locked, wakes up or sits idle, or when Windows shuts down.
 - Optional notification after a shortcut toggles a device, and an option to start with Windows.
 
@@ -19,7 +20,7 @@ Google's [Home APIs](https://developers.home.google.com/apis) only ship SDKs for
 Home Control signs in to [home.google.com](https://home.google.com) once, in a small browser window inside the app (Microsoft Edge WebView2). After that it keeps that page loaded in a hidden browser and sends the same requests the web app sends. Those requests go to Google's `googlehomefoyer-pa` API and are authorized from the page's own session.
 
 - **Devices are listed automatically.** Every device that can be turned on and off (lights, plugs, switches, TVs and so on) is added, with its room. Devices added later in Google Home appear at the next start or after **Sync now**. If a sync fails (no network yet, for example), it is retried once Google Home answers again or when you open the flyout.
-- **State is live.** The flyout reads every device's state in one request when it opens, and again every 10 seconds while it stays open. Offline devices are shown faded. Some devices, such as TVs, take a while to act on a command. Until such a device reports its new state, its toggle stays greyed out in the new position. Home Control checks again for up to a minute.
+- **State is live.** The flyout reads every device's state in one request when it opens, and again every 10 seconds while it stays open. Offline devices are shown faded. Some devices, such as TVs, take a while to act on a command. Until such a device reports its new state, its toggle stays greyed out in the new position. Home Control checks again for about 15 seconds; after that, the toggle shows what the device reports, so you can try again. The log (`home-control.log`) notes commands a device didn't confirm.
 - **Your sign-in stays on this PC,** in a private browser profile for this app only: `%LOCALAPPDATA%\HomeControl\WebView2`. **Sign out** clears it. While you're signed out, devices from Google Home are switched through Google Assistant if it is set up.
 
 The catch: this is the private interface of Google's own website, not an API Google offers to other apps. It can stop working whenever Google changes the site. Google may also refuse to sign in inside an embedded browser ("This browser or app may not be secure"). Use it for your own home only. If it breaks, Google Assistant (below) can take over.
@@ -57,9 +58,13 @@ Sign-in uses the standard installed-app OAuth flow: your browser, a loopback red
 
 > While the consent screen is in *Testing* mode, Google expires sign-ins after 7 days. To avoid that, set the app to *In production* on the consent screen; for your own account you can click through the "unverified app" warning. If commands don't work, turn on **Personal results** for your account in the Google Home app.
 
+## Scenes
+
+A scene groups devices under one toggle. Turning it on turns every device in it on, and turning it off turns them all off. It shows as on while any of its devices is on, as a room does in Google Home. Create scenes under **Settings › Scenes**: pick the devices, an icon and an optional shortcut. Choose whether the scene shows in the tray flyout, where it appears above the devices. **Move up/down** sets the order there. Each device in a scene switches through its own row, so a slow device (a TV, say) waits for confirmation in the same way.
+
 ## Automations
 
-Each automation is a small graph. **Triggers** (when) start it, **conditions** (if) choose a path through their *Yes* and *No* outputs, and **actions** (then) do the work. **Create** starts an empty automation. Add nodes with the editor's **Trigger**, **Condition** and **Action** buttons, or right-click the canvas. Wire nodes together by dragging from the dot on the right of one node to the dot on the left of the next. You can also drop a wire on an empty spot to add a connected node there. The editor has undo, zoom, and **Run now**, which runs the automation from a trigger and skips waits. Problems such as a missing device, a node that isn't connected, or sun times without a location are flagged on the nodes.
+Each automation is a small graph. **Triggers** (when) start it, **conditions** (if) choose a path through their *Yes* and *No* outputs, and **actions** (then) do the work. **New automation** starts an empty one. Add nodes with the editor's **Trigger**, **Condition** and **Action** buttons, or right-click the canvas. Wire nodes together by dragging from the dot on the right of one node to the dot on the left of the next. You can also drop a wire on an empty spot to add a connected node there. The editor has undo, zoom, and **Run now**, which runs the automation from a trigger and skips waits. Problems such as a missing device, a node that isn't connected, or sun times without a location are flagged on the nodes.
 
 | Node | Kind | What it does |
 |---|---|---|
@@ -128,6 +133,7 @@ dotnet test tests/HomeControl.Core.Tests
 | Right-click tray icon | Refresh device states, Turn all off, Sync devices, Settings, Exit |
 | Device shortcut | Toggles that device; a notification confirms it (can be turned off) |
 | Settings › Devices | Devices grouped by home and room. Groups collapse, and Home Control remembers which. Sync from Google Home, show or hide devices in the tray, rename, record shortcuts, **Try it** buttons; add Assistant devices by name. **Move up/down** sets the order within a room, which is also the order in the flyout. |
+| Settings › Scenes | Groups of devices with one toggle: devices, icon, shortcut, shown in the tray or not |
 | Settings › Automations | Location, automation list and the node editor |
 | Settings › Account | Google Home sign-in and sync; Google Assistant setup, fallback, language and command phrases |
 | Settings › General | Theme, window material, flyout shortcut, notifications, start with Windows |

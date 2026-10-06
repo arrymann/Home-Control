@@ -62,6 +62,7 @@ public sealed partial class TrayPopupWindow : Window
             Hide();
         };
         Root.KeyboardAccelerators.Add(escape);
+        Root.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden; // no "Escape" tooltip
 
         ContentRoot.Loaded += (_, _) => RequestResize();
         ViewModel.LayoutChanged += (_, _) => RequestResize();
@@ -269,7 +270,7 @@ public sealed partial class TrayPopupWindow : Window
         if (ContentRoot.XamlRoot is null)
         {
             // Not loaded yet (first open): estimate, then refit once loaded.
-            return 120 + (ViewModel.ShowDevices ? ViewModel.Devices.Count * 64 + 8 : 220);
+            return 120 + (ViewModel.ShowDevices ? (ViewModel.Devices.Count + ViewModel.Scenes.Count) * 64 + (ViewModel.HasScenes ? 60 : 8) : 220);
         }
 
         ContentRoot.Measure(new Size(PopupWidth, double.PositiveInfinity));

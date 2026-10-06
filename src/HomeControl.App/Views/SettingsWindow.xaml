@@ -50,6 +50,11 @@
                             <FontIcon Glyph="&#xE80F;" />
                         </NavigationViewItem.Icon>
                     </NavigationViewItem>
+                    <NavigationViewItem Content="Scenes" Tag="scenes">
+                        <NavigationViewItem.Icon>
+                            <FontIcon Glyph="&#xE8A9;" />
+                        </NavigationViewItem.Icon>
+                    </NavigationViewItem>
                     <NavigationViewItem Content="Automations" Tag="automations">
                         <NavigationViewItem.Icon>
                             <FontIcon Glyph="&#xE945;" />

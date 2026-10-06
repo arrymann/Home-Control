@@ -78,7 +78,16 @@ internal static class SmokeTest
             FromGoogleHome("Heater", "Kitchen", DeviceKind.Heater, home: "Cottage"),
         ];
         host.Settings.Devices.AddRange(samples);
+
+        // Scenes: one in the tray with a shortcut, one only for its shortcut.
+        host.Settings.Scenes.Add(new SceneConfig { Name = "Movie time", Kind = DeviceKind.Tv, DeviceIds = [samples[1].Id, samples[4].Id], Hotkey = Shortcut(5) });
+        host.Settings.Scenes.Add(new SceneConfig { Name = "Office", Kind = DeviceKind.Outlet, DeviceIds = [samples[2].Id, samples[3].Id], ShowInTray = false });
         host.Home.LoadDevices(host.Settings.Devices);
+        host.Home.LoadScenes(host.Settings.Scenes);
+        if (host.Home.Scenes.Count != 1 || host.Home.FindScene(host.Settings.Scenes[1].Id) is null)
+        {
+            errors.Add($"Scenes: the popup shows {host.Home.Scenes.Count} scenes.");
+        }
         host.Home.SimulateSignedIn();
         if (host.Home.Devices.Count != host.Settings.Devices.Count(d => !d.Hidden && !d.Missing))
         {
@@ -114,6 +123,7 @@ internal static class SmokeTest
         await Step("flyout dark", () => SetTheme(ThemePreference.Dark), () => host.PopupWindowHandle);
 
         await Step("settings devices dark", () => host.OpenSettings("devices"), () => host.SettingsWindowHandle, waitMs: 2500);
+        await Step("settings scenes dark", () => host.OpenSettings("scenes"), () => host.SettingsWindowHandle, waitMs: 1500);
         await Step("settings account light", () =>
         {
             SetTheme(ThemePreference.Light);
@@ -184,6 +194,18 @@ internal static class SmokeTest
             }, () => host.SettingsWindowHandle);
             await Step($"close {name}", () => dialog?.Hide(), waitMs: 500);
         }
+
+        SceneEditorDialog? sceneDialog = null;
+        await Step("scene dialog", () =>
+        {
+            sceneDialog = new SceneEditorDialog(host.Settings.Scenes[0])
+            {
+                XamlRoot = host.SettingsXamlRoot,
+                RequestedTheme = host.EffectiveTheme,
+            };
+            _ = sceneDialog.ShowAsync();
+        }, () => host.SettingsWindowHandle);
+        await Step("close scene dialog", () => sceneDialog?.Hide(), waitMs: 500);
 
         // Google Home: the sign-in window, a script in the hidden page, and a sync without a session.
         await Step("google sign-in", host.OpenGoogleSignIn, () => host.SignInWindowHandle, waitMs: 5000);

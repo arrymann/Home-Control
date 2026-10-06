@@ -75,6 +75,7 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
             }
         };
         KeyboardAccelerators.Add(undo);
+        KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden; // no "Ctrl+Z" tooltip over the whole page
 
         // "Next: today 21:14" texts on time triggers.
         _infoTimer = DispatcherQueue.CreateTimer();

@@ -71,14 +71,14 @@
                 </toolkit:SettingsExpander>
                 <InfoBar x:Name="LocationMessage" Severity="Warning" />
 
-                <toolkit:SettingsCard Description="Starts empty: add a trigger, then conditions and actions." Header="New automation">
+                <toolkit:SettingsCard
+                    Click="OnNewClick"
+                    Description="Starts empty: add a trigger, then conditions and actions."
+                    Header="New automation"
+                    IsClickEnabled="True">
                     <toolkit:SettingsCard.HeaderIcon>
                         <FontIcon Glyph="&#xE710;" />
                     </toolkit:SettingsCard.HeaderIcon>
-                    <Button
-                        x:Name="NewButton"
-                        Click="OnNewClick"
-                        Content="Create" />
                 </toolkit:SettingsCard>
 
                 <TextBlock
@@ -133,7 +133,7 @@
                     x:Name="EmptyText"
                     Margin="1,8,0,0"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="No automations yet. Create one above."
+                    Text="No automations yet. Click “New automation” above."
                     TextWrapping="Wrap" />
             </StackPanel>
         </ScrollViewer>

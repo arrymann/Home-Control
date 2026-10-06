@@ -129,6 +129,7 @@ internal sealed class AppHost
 
         Home = new HomeViewModel(Controller, Account);
         Home.LoadDevices(Settings.Devices);
+        Home.LoadScenes(Settings.Scenes);
 
         // Until the first request says otherwise, assume an earlier Google Home sign-in still works.
         Home.SetGoogleHomeConnected(Settings.GoogleHome.Enabled);
@@ -197,6 +198,7 @@ internal sealed class AppHost
     {
         SaveSettingsQuietly();
         Home.LoadDevices(Settings.Devices);
+        Home.LoadScenes(Settings.Scenes);
         ApplyHotkeys();
         ApplyAppearance();
         SettingsApplied?.Invoke(this, EventArgs.Empty);
@@ -394,17 +396,24 @@ internal sealed class AppHost
     /// Checks a shortcut against the app's other shortcuts and against other applications.
     /// Returns an error message, or null when the shortcut can be used.
     /// </summary>
-    public string? ValidateHotkey(Core.Hotkeys.Hotkey hotkey, string? deviceId, bool isPopupHotkey)
+    /// <param name="ownerId">The device or scene the shortcut is for (its own shortcut is no conflict).</param>
+    public string? ValidateHotkey(Core.Hotkeys.Hotkey hotkey, string? ownerId, bool isPopupHotkey)
     {
         if (!isPopupHotkey && Settings.OpenPopupHotkey == hotkey)
         {
             return "already opens Home Control.";
         }
 
-        var other = Settings.Devices.FirstOrDefault(d => d.Id != deviceId && d.Hotkey == hotkey);
+        var other = Settings.Devices.FirstOrDefault(d => d.Id != ownerId && d.Hotkey == hotkey);
         if (other is not null)
         {
             return $"already used for {other.Label}.";
+        }
+
+        var scene = Settings.Scenes.FirstOrDefault(s => s.Id != ownerId && s.Hotkey == hotkey);
+        if (scene is not null)
+        {
+            return $"already used for the scene {scene.Name.Trim()}.";
         }
 
         return _hotkeys.IsAvailable(hotkey) ? null : "another app is using this shortcut.";
@@ -638,7 +647,37 @@ internal sealed class AppHost
             }
         }
 
+        foreach (var scene in Settings.Scenes)
+        {
+            if (scene.Hotkey is { IsValid: true } hotkey)
+            {
+                var id = scene.Id;
+                bindings.Add(new HotkeyBinding(hotkey, $"the scene {scene.Name.Trim()}", () => _ = ToggleSceneFromHotkeyAsync(id)));
+            }
+        }
+
         _hotkeys.Apply(bindings);
+    }
+
+    private async Task ToggleSceneFromHotkeyAsync(string sceneId)
+    {
+        if (Home.FindScene(sceneId) is not { } scene)
+        {
+            return;
+        }
+
+        if (!Home.IsConnected)
+        {
+            _trayIcon.ShowNotification("Home Control", "Sign in to Google Home in Settings › Account to control your devices.");
+            return;
+        }
+
+        var turnOn = !(scene.State ?? false);
+        var failed = await scene.SetPowerAsync(turnOn);
+        if (Settings.NotifyOnHotkey || failed is not null)
+        {
+            _trayIcon.ShowNotification(scene.Label, failed is null ? $"Turned {(turnOn ? "on" : "off")}" : $"Not everything switched: {failed}");
+        }
     }
 
     private async Task ToggleFromHotkeyAsync(string deviceId)

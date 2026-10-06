@@ -107,6 +107,7 @@ public sealed partial class SettingsWindow : Window
         var pageType = page switch
         {
             "account" => typeof(AccountPage),
+            "scenes" => typeof(ScenesPage),
             "automations" => typeof(AutomationsPage),
             "general" => typeof(GeneralPage),
             _ => typeof(DevicesPage),

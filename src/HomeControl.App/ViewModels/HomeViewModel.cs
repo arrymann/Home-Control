@@ -29,11 +29,19 @@ public sealed class HomeViewModel : BindableBase
     // Devices hidden from the popup still work with their shortcuts.
     private Dictionary<string, DeviceViewModel> _hidden = [];
 
+    // Every scene, including those not shown in the tray (their shortcuts still work).
+    private Dictionary<string, SceneViewModel> _scenes = [];
+
     internal HomeViewModel(IDeviceController controller, GoogleAccount account)
     {
         Controller = controller;
         _account = account;
         Devices.CollectionChanged += (_, _) => RaiseListChanged();
+        Scenes.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasScenes));
+            RaiseListChanged();
+        };
         UpdateAccountState();
     }
 
@@ -43,6 +51,12 @@ public sealed class HomeViewModel : BindableBase
 
     /// <summary>Devices shown in the popup (hidden and missing devices are left out).</summary>
     public ObservableCollection<DeviceViewModel> Devices { get; } = [];
+
+    /// <summary>Scenes shown in the popup, above the devices.</summary>
+    public ObservableCollection<SceneViewModel> Scenes { get; } = [];
+
+    /// <summary>The popup has scenes, so it labels its two lists.</summary>
+    public bool HasScenes => Scenes.Count > 0;
 
     /// <summary>Google Assistant is signed in.</summary>
     public bool IsAssistantSignedIn
@@ -234,6 +248,48 @@ public sealed class HomeViewModel : BindableBase
 
     /// <summary>A device by id, including devices hidden from the popup (for shortcuts).</summary>
     public DeviceViewModel? Find(string id) => Devices.FirstOrDefault(d => d.Id == id) ?? _hidden.GetValueOrDefault(id);
+
+    /// <summary>A scene by id, including scenes not shown in the popup (for shortcuts).</summary>
+    public SceneViewModel? FindScene(string id) => _scenes.GetValueOrDefault(id);
+
+    /// <summary>Syncs the scenes with the settings. Call after <see cref="LoadDevices"/>: scenes switch those rows.</summary>
+    internal void LoadScenes(IReadOnlyList<SceneConfig> configs)
+    {
+        var scenes = new Dictionary<string, SceneViewModel>();
+        foreach (var config in configs)
+        {
+            if (!_scenes.TryGetValue(config.Id, out var scene))
+            {
+                scene = new SceneViewModel(config);
+            }
+            else
+            {
+                scene.Update(config);
+            }
+
+            // Devices that were removed (or vanished from Google Home) are left out.
+            scene.SetMembers(config.DeviceIds.Select(Find).OfType<DeviceViewModel>().ToList());
+            scenes[config.Id] = scene;
+        }
+
+        foreach (var gone in _scenes.Values.Where(s => !scenes.ContainsKey(s.Id)))
+        {
+            gone.SetMembers([]);
+        }
+
+        _scenes = scenes;
+        var shown = configs.Where(c => c.ShowInTray).Select(c => scenes[c.Id]).ToList();
+        if (!shown.SequenceEqual(Scenes))
+        {
+            Scenes.Clear();
+            foreach (var scene in shown)
+            {
+                Scenes.Add(scene);
+            }
+        }
+
+        RaiseListChanged();
+    }
 
     /// <summary>
     /// Refreshes every device: Google Home devices in one request, Assistant devices one by one
@@ -447,7 +503,7 @@ public sealed class HomeViewModel : BindableBase
         LayoutChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private static async Task RunLimitedAsync(IReadOnlyList<DeviceViewModel> devices, Func<DeviceViewModel, Task> action)
+    internal static async Task RunLimitedAsync(IReadOnlyList<DeviceViewModel> devices, Func<DeviceViewModel, Task> action)
     {
         if (devices.Count == 0)
         {

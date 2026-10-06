@@ -25,9 +25,13 @@ public sealed class DeviceViewModel : BindableBase
     private DateTimeOffset _lastUpdated = DateTimeOffset.MinValue;
     private long _lastCommandEnded;
 
-    /// <summary>When a device hasn't confirmed a command, it is asked again after these waits (about a minute in all).</summary>
+    /// <summary>
+    /// When a device hasn't confirmed a command, it is asked again after these waits: about 15
+    /// seconds in all, so a command that didn't take (a TV asleep too deeply) can soon be sent
+    /// again. Later changes show up with the flyout's regular refresh.
+    /// </summary>
     private static readonly TimeSpan[] VerifyDelays =
-        [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(25)];
+        [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(6)];
 
     internal DeviceViewModel(HomeViewModel owner, DeviceConfig config)
     {
@@ -115,6 +119,9 @@ public sealed class DeviceViewModel : BindableBase
             }
         }
     }
+
+    /// <summary>The state to count for scenes: what was asked while waiting for the device, else the known state.</summary>
+    internal bool? EffectiveState => _isPending ? _pendingTarget : _state;
 
     /// <summary>Tooltip while <see cref="IsPending"/>.</summary>
     public string? PendingText => _isPending ? $"Waiting for {Label} to turn {(_pendingTarget ? "on" : "off")}…" : null;
@@ -259,7 +266,9 @@ public sealed class DeviceViewModel : BindableBase
                 }
                 else
                 {
-                    StartVerifying(turnOn); // accepted, but the device hasn't caught up yet
+                    // Accepted, but the device hasn't caught up yet (or doesn't say).
+                    Log.Info($"{Label}: “turn {(turnOn ? "on" : "off")}” accepted; the device reports {StateText(result.IsOn)}. Checking again.");
+                    StartVerifying(turnOn);
                 }
             }
             else
@@ -399,6 +408,11 @@ public sealed class DeviceViewModel : BindableBase
         }
 
         // Confirmed, or it gave up: show what the device last said (still unknown: what was asked).
+        if (reported != target)
+        {
+            Log.Info($"{Label}: still reports {StateText(reported)} after “turn {(target ? "on" : "off")}”.");
+        }
+
         _verify = null;
         IsPending = false;
         _lastCommandEnded = Stopwatch.GetTimestamp(); // reads sent meanwhile mustn't undo this
@@ -446,6 +460,8 @@ public sealed class DeviceViewModel : BindableBase
                 return "Something went wrong";
         }
     }
+
+    private static string StateText(bool? state) => state switch { true => "on", false => "off", null => "no state" };
 
     private static string Shorten(string message) =>
         string.IsNullOrWhiteSpace(message) ? "Failed" : message.Length <= 80 ? message : message[..79] + "…";

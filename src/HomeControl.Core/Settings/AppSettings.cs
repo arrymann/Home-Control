@@ -48,6 +48,9 @@ public sealed class AppSettings
 
     public List<DeviceConfig> Devices { get; set; } = [];
 
+    /// <summary>Devices grouped under one toggle (Settings › Scenes), in the flyout's order.</summary>
+    public List<SceneConfig> Scenes { get; set; } = [];
+
     /// <summary>Home and room groups collapsed on the Devices page (groups start expanded).</summary>
     public List<string> CollapsedDeviceGroups { get; set; } = [];
 }

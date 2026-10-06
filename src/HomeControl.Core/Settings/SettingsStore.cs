@@ -87,6 +87,8 @@ public sealed class SettingsStore
         settings.Devices ??= [];
         settings.Devices.RemoveAll(d => d is null);
         settings.CollapsedDeviceGroups = (settings.CollapsedDeviceGroups ?? []).Where(g => !string.IsNullOrEmpty(g)).Distinct().ToList();
+        settings.Scenes ??= [];
+        settings.Scenes.RemoveAll(s => s is null);
 
         var seen = new HashSet<string>();
         foreach (var device in settings.Devices)
@@ -101,6 +103,23 @@ public sealed class SettingsStore
             if (device.Hotkey is { IsValid: false })
             {
                 device.Hotkey = null;
+            }
+        }
+
+        var sceneIds = new HashSet<string>(seen);
+        foreach (var scene in settings.Scenes)
+        {
+            scene.Name ??= string.Empty;
+            scene.DeviceIds = (scene.DeviceIds ?? []).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+            if (string.IsNullOrWhiteSpace(scene.Id) || !sceneIds.Add(scene.Id))
+            {
+                scene.Id = Guid.NewGuid().ToString("N");
+                sceneIds.Add(scene.Id);
+            }
+
+            if (scene.Hotkey is { IsValid: false })
+            {
+                scene.Hotkey = null;
             }
         }
 
