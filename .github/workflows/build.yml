@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  checks: write
 
 env:
   DOTNET_NOLOGO: true
@@ -103,39 +102,6 @@ jobs:
           if ($app.HasExited) { throw 'Home Control did not keep running' }
           Start-Process -FilePath $exe -ArgumentList '--exit' -Wait
           if (-not $app.WaitForExit(20000)) { throw 'Home Control did not exit on --exit' }
-      - name: Publish screenshot previews (temporary)
-        if: always() && matrix.platform == 'x64'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          Add-Type -AssemblyName System.Drawing
-          $jpeg = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object MimeType -eq 'image/jpeg'
-          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
-          $wanted = 'builder-ready', 'builder-done', 'flyout-light', 'flyout-dark', 'settings-devices-dark', 'settings-automations-dark', 'automation-editor-light'
-          foreach ($shot in Get-ChildItem (Join-Path $env:RUNNER_TEMP 'screenshots') | Where-Object { $wanted -contains $_.BaseName }) {
-            $image = [System.Drawing.Image]::FromFile($shot.FullName)
-            $text = $null
-            foreach ($scale in 1.0, 0.8, 0.65, 0.5, 0.4) {
-              $w = [int]($image.Width * $scale); $h = [int]($image.Height * $scale)
-              $small = New-Object System.Drawing.Bitmap $w, $h
-              $g = [System.Drawing.Graphics]::FromImage($small)
-              $g.InterpolationMode = 'HighQualityBicubic'
-              $g.DrawImage($image, 0, 0, $w, $h)
-              $parameters = New-Object System.Drawing.Imaging.EncoderParameters 1
-              $parameters.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality, [long]75)
-              $buffer = New-Object IO.MemoryStream
-              $small.Save($buffer, $jpeg, $parameters)
-              $text = [Convert]::ToBase64String($buffer.ToArray())
-              if ($text.Length -le 65000) { break }
-            }
-            $body = @{
-              name = "preview $($shot.BaseName)"; head_sha = '${{ github.sha }}'; status = 'completed'; conclusion = 'neutral'
-              output = @{ title = $shot.BaseName; summary = 'Base64 JPEG preview'; text = $text }
-            } | ConvertTo-Json -Depth 5
-            $run = Invoke-RestMethod -Method Post -Uri 'https://api.github.com/repos/${{ github.repository }}/check-runs' -Headers $headers -Body $body
-            Write-Output "$($shot.BaseName): check run $($run.id) ($($text.Length) chars)"
-          }
       - name: Upload screenshots
         if: matrix.platform == 'x64'
         uses: actions/upload-artifact@v6
