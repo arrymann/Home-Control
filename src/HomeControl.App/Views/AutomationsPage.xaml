@@ -152,11 +152,14 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <Grid ColumnSpacing="8">
+            <Grid ColumnSpacing="8" RowSpacing="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
@@ -172,6 +175,7 @@
                 <TextBox
                     x:Name="NameBox"
                     Grid.Column="1"
+                    MinWidth="160"
                     MaxWidth="360"
                     HorizontalAlignment="Stretch"
                     VerticalAlignment="Center"
@@ -187,9 +191,11 @@
                     OffContent="Off"
                     OnContent="On"
                     Toggled="OnEditorEnabledToggled" />
-                <!-- One button per kind of node, marked with the colour of its cards. -->
+                <!-- One button per kind of node, marked with the colour of its cards, in a row of their own. -->
                 <StackPanel
-                    Grid.Column="3"
+                    Grid.Row="1"
+                    Grid.Column="1"
+                    Grid.ColumnSpan="5"
                     VerticalAlignment="Center"
                     Orientation="Horizontal"
                     Spacing="4">
@@ -226,7 +232,7 @@
                 </StackPanel>
                 <Button
                     x:Name="RunButton"
-                    Grid.Column="4"
+                    Grid.Column="3"
                     VerticalAlignment="Center"
                     Click="OnRunClick"
                     ToolTipService.ToolTip="Run now from a trigger (waits are skipped)">
@@ -237,14 +243,14 @@
                 </Button>
                 <Button
                     x:Name="UndoButton"
-                    Grid.Column="5"
+                    Grid.Column="4"
                     AutomationProperties.Name="Undo"
                     Click="OnUndoClick"
                     Style="{StaticResource IconButtonStyle}"
                     ToolTipService.ToolTip="Undo (Ctrl+Z)">
                     <FontIcon FontSize="14" Glyph="&#xE7A7;" />
                 </Button>
-                <StackPanel Grid.Column="6" Orientation="Horizontal">
+                <StackPanel Grid.Column="5" Orientation="Horizontal">
                     <Button
                         AutomationProperties.Name="Zoom out"
                         Click="OnZoomOutClick"
