@@ -11,6 +11,57 @@
         <!-- Disabled icon buttons (Move up on the first device...) stay borderless. -->
         <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
         <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="Transparent" />
+
+        <!-- A device row (inside its room). -->
+        <DataTemplate x:Key="DeviceTemplate" x:DataType="local:DeviceListItem">
+            <toolkit:SettingsCard Description="{x:Bind Description}" Header="{x:Bind Label}">
+                <toolkit:SettingsCard.HeaderIcon>
+                    <PathIcon Data="{x:Bind helpers:Ui.DeviceIcon(Kind)}" />
+                </toolkit:SettingsCard.HeaderIcon>
+                <StackPanel Orientation="Horizontal" Spacing="2">
+                    <ToggleSwitch
+                        MinWidth="0"
+                        Margin="0,0,8,0"
+                        AutomationProperties.Name="Show in the tray"
+                        IsOn="{x:Bind ShowInTray}"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnShowInTrayToggled"
+                        ToolTipService.ToolTip="Show in the tray" />
+                    <Button
+                        AutomationProperties.Name="Move up"
+                        Click="OnMoveUpClick"
+                        IsEnabled="{x:Bind CanMoveUp}"
+                        Style="{StaticResource IconButtonStyle}"
+                        ToolTipService.ToolTip="Move up">
+                        <FontIcon FontSize="14" Glyph="&#xE74A;" />
+                    </Button>
+                    <Button
+                        AutomationProperties.Name="Move down"
+                        Click="OnMoveDownClick"
+                        IsEnabled="{x:Bind CanMoveDown}"
+                        Style="{StaticResource IconButtonStyle}"
+                        ToolTipService.ToolTip="Move down">
+                        <FontIcon FontSize="14" Glyph="&#xE74B;" />
+                    </Button>
+                    <Button
+                        AutomationProperties.Name="Edit"
+                        Click="OnEditClick"
+                        Style="{StaticResource IconButtonStyle}"
+                        ToolTipService.ToolTip="Edit">
+                        <FontIcon FontSize="14" Glyph="&#xE70F;" />
+                    </Button>
+                    <Button
+                        AutomationProperties.Name="Remove"
+                        Click="OnRemoveClick"
+                        IsEnabled="{x:Bind CanRemove}"
+                        Style="{StaticResource IconButtonStyle}"
+                        ToolTipService.ToolTip="{x:Bind RemoveToolTip}">
+                        <FontIcon FontSize="14" Glyph="&#xE74D;" />
+                    </Button>
+                </StackPanel>
+            </toolkit:SettingsCard>
+        </DataTemplate>
     </Page.Resources>
 
     <ScrollViewer>
@@ -74,61 +125,52 @@
                 x:Name="ListHeader"
                 Style="{StaticResource SettingsSectionHeaderStyle}"
                 Text="Your devices" />
-            <ItemsControl x:Name="DeviceList" IsTabStop="False">
+            <!-- Homes, each with collapsible rooms. The tray keeps its own order (Move up/down). -->
+            <ItemsControl x:Name="HomeList" IsTabStop="False">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <StackPanel Spacing="4" />
+                        <StackPanel Spacing="16" />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="local:DeviceListItem">
-                        <toolkit:SettingsCard Description="{x:Bind Description}" Header="{x:Bind Label}">
-                            <toolkit:SettingsCard.HeaderIcon>
-                                <PathIcon Data="{x:Bind helpers:Ui.DeviceIcon(Kind)}" />
-                            </toolkit:SettingsCard.HeaderIcon>
-                            <StackPanel Orientation="Horizontal" Spacing="2">
-                                <ToggleSwitch
-                                    MinWidth="0"
-                                    Margin="0,0,8,0"
-                                    AutomationProperties.Name="Show in the tray"
-                                    IsOn="{x:Bind ShowInTray}"
-                                    OffContent=""
-                                    OnContent=""
-                                    Toggled="OnShowInTrayToggled"
-                                    ToolTipService.ToolTip="Show in the tray" />
-                                <Button
-                                    AutomationProperties.Name="Move up"
-                                    Click="OnMoveUpClick"
-                                    IsEnabled="{x:Bind CanMoveUp}"
-                                    Style="{StaticResource IconButtonStyle}"
-                                    ToolTipService.ToolTip="Move up">
-                                    <FontIcon FontSize="14" Glyph="&#xE74A;" />
-                                </Button>
-                                <Button
-                                    AutomationProperties.Name="Move down"
-                                    Click="OnMoveDownClick"
-                                    IsEnabled="{x:Bind CanMoveDown}"
-                                    Style="{StaticResource IconButtonStyle}"
-                                    ToolTipService.ToolTip="Move down">
-                                    <FontIcon FontSize="14" Glyph="&#xE74B;" />
-                                </Button>
-                                <Button
-                                    AutomationProperties.Name="Edit"
-                                    Click="OnEditClick"
-                                    Style="{StaticResource IconButtonStyle}"
-                                    ToolTipService.ToolTip="Edit">
-                                    <FontIcon FontSize="14" Glyph="&#xE70F;" />
-                                </Button>
-                                <Button
-                                    AutomationProperties.Name="Remove"
-                                    Click="OnRemoveClick"
-                                    IsEnabled="{x:Bind CanRemove}"
-                                    Style="{StaticResource IconButtonStyle}"
-                                    ToolTipService.ToolTip="{x:Bind RemoveToolTip}">
-                                    <FontIcon FontSize="14" Glyph="&#xE74D;" />
-                                </Button>
-                            </StackPanel>
-                        </toolkit:SettingsCard>
+                    <DataTemplate x:DataType="local:DeviceHomeGroup">
+                        <StackPanel Spacing="4">
+                            <Button
+                                Padding="8,6"
+                                HorizontalAlignment="Left"
+                                AutomationProperties.Name="{x:Bind AccessibleName, Mode=OneWay}"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                Click="OnHomeHeaderClick"
+                                ToolTipService.ToolTip="{x:Bind ToggleText, Mode=OneWay}">
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <FontIcon FontSize="12" Glyph="{x:Bind Chevron, Mode=OneWay}" />
+                                    <FontIcon FontSize="16" Glyph="&#xE80F;" />
+                                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="{x:Bind Title}" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Count}" />
+                                </StackPanel>
+                            </Button>
+                            <ItemsControl
+                                IsTabStop="False"
+                                ItemsSource="{x:Bind Rooms}"
+                                Visibility="{x:Bind RoomsVisibility, Mode=OneWay}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Spacing="4" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="local:DeviceRoomGroup">
+                                        <toolkit:SettingsExpander
+                                            Description="{x:Bind Description}"
+                                            Header="{x:Bind Title}"
+                                            IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}"
+                                            ItemTemplate="{StaticResource DeviceTemplate}"
+                                            ItemsSource="{x:Bind Devices}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>

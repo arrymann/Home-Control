@@ -49,12 +49,16 @@ $LogPath = Join-Path $DataFolder 'build.log'
 $SettingsPath = Join-Path $DataFolder 'builder.json'
 $DefaultDestination = Join-Path $env:LOCALAPPDATA 'Programs\Home Control'
 $ShortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'Home Control.lnk'
-$UserSdkFolder = Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet' # where dotnet-install.ps1 puts it by default
+$CommonUserSdkFolder = Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet' # where dotnet-install.ps1 puts it by default
+$OwnSdkFolder = Join-Path $DataFolder 'dotnet-sdk'               # where "Set it up" puts it
+$SdkSetupFolder = Join-Path $DataFolder 'dotnet-sdk-setup'       # unpacked here first, renamed when complete
 $SdkInstallScriptUrl = 'https://dot.net/v1/dotnet-install.ps1'
 $SdkDownloadPage = 'https://dotnet.microsoft.com/download/dotnet/10.0'
 $RequiredSdkMajor = 10
 $Interactive = -not $NoGui -and -not $SmokeTest
 $Ellipsis = [string][char]0x2026
+# The same PowerShell as this one (not the ISE, say, when the script was started from there).
+$HostExe = Join-Path $PSHOME $(if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' })
 
 # Quotes a path for a Windows command line (paths can't contain quotes; a trailing backslash
 # would escape the closing quote, so it's doubled).
@@ -72,7 +76,16 @@ if ($Interactive -and -not $Detached) {
     if ($Destination) { $arguments += ' -Destination ' + (ConvertTo-Argument $Destination) }
     if ($NoShortcut) { $arguments += ' -NoShortcut' }
     if ($NoStart) { $arguments += ' -NoStart' }
-    Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments -WindowStyle Hidden
+    Write-Host 'Opening the builder...'
+    $builder = Start-Process -FilePath $HostExe -ArgumentList $arguments -WindowStyle Hidden -PassThru
+
+    # Keep this console up (the only sign of life) until the window shows: that takes a few seconds.
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not $builder.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+        $builder.Refresh()
+        if ($builder.MainWindowHandle -ne [IntPtr]::Zero) { break }
+        Start-Sleep -Milliseconds 250
+    }
     exit 0
 }
 
@@ -265,6 +278,23 @@ namespace HomeControlBuilder
             }
         }
 
+        // Brings a window to the front (the builder that is already open).
+        public static bool Activate(string title)
+        {
+            IntPtr window = FindWindowW(null, title);
+            if (window == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (IsIconic(window))
+            {
+                ShowWindow(window, 9); // SW_RESTORE
+            }
+
+            return SetForegroundWindow(window);
+        }
+
         // Asks a running Home Control to exit, as "HomeControl.exe --exit" does (MessageWindow.WM_EXIT_APP).
         public static bool AskHomeControlToExit()
         {
@@ -298,6 +328,18 @@ namespace HomeControlBuilder
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool PostMessageW(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsIconic(IntPtr window);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ShowWindow(IntPtr window, int command);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetForegroundWindow(IntPtr window);
 
         [ComImport]
         [Guid("00021401-0000-0000-C000-000000000046")]
@@ -381,6 +423,7 @@ function Get-ChildEnvironment([string] $DotNetFolder) {
         DOTNET_NOLOGO = '1'
         DOTNET_CLI_TELEMETRY_OPTOUT = '1'
         DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+        DOTNET_CLI_UI_LANGUAGE = 'en-US' # the progress and the hints read English messages
     }
     if ($DotNetFolder) {
         $environment['DOTNET_ROOT'] = $DotNetFolder
@@ -397,20 +440,27 @@ function Find-DotNetSdk {
     $Sdk.Older = $null
 
     $candidates = New-Object System.Collections.Generic.List[string]
-    if ($env:DOTNET_ROOT) { $candidates.Add((Join-Path $env:DOTNET_ROOT 'dotnet.exe')) }
+    if ($env:DOTNET_ROOT) { try { $candidates.Add([IO.Path]::Combine($env:DOTNET_ROOT, 'dotnet.exe')) } catch { } }
     foreach ($command in @(Get-Command 'dotnet.exe' -CommandType Application -ErrorAction SilentlyContinue)) {
         $candidates.Add($command.Path)
     }
     foreach ($folder in @($env:ProgramW6432, $env:ProgramFiles)) {
         if ($folder) { $candidates.Add((Join-Path $folder 'dotnet\dotnet.exe')) }
     }
-    $candidates.Add((Join-Path $UserSdkFolder 'dotnet.exe'))
+    $candidates.Add((Join-Path $CommonUserSdkFolder 'dotnet.exe'))
+    $candidates.Add((Join-Path $OwnSdkFolder 'dotnet.exe'))
 
     $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($path in $candidates) {
-        if (-not $seen.Add($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        if (-not $seen.Add($path)) { continue }
+        try {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            $result = [HomeControlBuilder.ProcessRunner]::Run($path, '--list-sdks', (Get-ChildEnvironment (Split-Path -Parent $path)), 30000)
+        }
+        catch {
+            continue # one that can't run (missing drive, blocked file): try the next
+        }
 
-        $result = [HomeControlBuilder.ProcessRunner]::Run($path, '--list-sdks', (Get-ChildEnvironment (Split-Path -Parent $path)), 30000)
         foreach ($line in ($result.Output -split "`n")) {
             # "10.0.100 [C:\Program Files\dotnet\sdk]" or "10.0.100-rc.2.25502.107 [...]"
             if ($line -notmatch '^\s*(\d+)\.(\d+)\.(\d+)(\S*)\s') { continue }
@@ -646,8 +696,10 @@ function Resolve-Destination([string] $Path) {
 }
 
 # Wrap calls in @(): a function returns one process as itself, not as an array.
+# Only this Windows session's copy: another signed-in user's can't be closed, and doesn't need to be.
 function Get-RunningHomeControl {
-    Get-Process -Name 'HomeControl' -ErrorAction SilentlyContinue
+    $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+    Get-Process -Name 'HomeControl' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session }
 }
 
 function Get-ProcessPath($Process) {
@@ -701,7 +753,8 @@ function Start-Build {
     Write-JobLine "Source: $RepoRoot"
     Write-JobLine ".NET SDK: $($Sdk.Text) ($($Sdk.Path))"
     if ($mustClose) {
-        Set-Status ('Closing Home Control' + $Ellipsis) 'So its files can be replaced.' 'Busy'
+        $Job.StageText = 'So its files can be replaced.'
+        Set-Status ('Closing Home Control' + $Ellipsis) $Job.StageText 'Busy'
         [void][HomeControlBuilder.Native]::AskHomeControlToExit()
         $Job.Stage = 'Closing'
         $Job.Deadline = [DateTime]::UtcNow.AddSeconds(8) # builds without the exit message are closed by force after this
@@ -714,6 +767,8 @@ function Start-Build {
 
 # Common start of a build or an SDK set-up.
 function Initialize-Job {
+    if ($Job.Log) { try { $Job.Log.Dispose() } catch { }; $Job.Log = $null }
+    $Job.StageText = ''
     $Job.Busy = $true
     $Job.Succeeded = $false
     $Job.Failure = $null
@@ -859,14 +914,15 @@ function Stop-CurrentJob {
     if ($Job.Runner) { $Job.Runner.Kill() }
     if ($Job.Client) { try { $Job.Client.CancelAsync() } catch { } }
     Write-JobLine 'Stopped.'
-    Complete-Job $false 'Stopped' 'Build again whenever you like.'
+    $next = if ($Job.Kind -eq 'Sdk') { 'Choose "Set it up" to try again.' } else { 'Build again whenever you like.' }
+    Complete-Job $false 'Stopped' $next
 }
 
 # ------------------------------------------------------------------ setting up the SDK
 
 function Start-SdkSetup {
     if ($Job.Busy) { return }
-    $question = "Set up the .NET 10 SDK for your account?`n`nIt downloads about 300 MB from Microsoft and goes in $UserSdkFolder. No administrator rights are needed."
+    $question = "Set up the .NET 10 SDK for your account?`n`nIt downloads about 300 MB from Microsoft and goes in $OwnSdkFolder. No administrator rights are needed."
     if (-not (Confirm-Action $question $true)) { return }
 
     $Job.Kind = 'Sdk'
@@ -895,16 +951,24 @@ function Start-SdkInstaller {
         return
     }
 
-    $hostPath = (Get-Process -Id $PID).Path
-    $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File {0} -Channel 10.0 -InstallDir {1} -NoPath' -f (ConvertTo-Argument $Job.InstallScript), (ConvertTo-Argument $UserSdkFolder)
-    Write-JobLine "> dotnet-install.ps1 -Channel 10.0 -InstallDir $UserSdkFolder"
-    $Job.Runner = New-Object HomeControlBuilder.ProcessRunner -ArgumentList @($hostPath, $arguments, $null, (Get-ChildEnvironment $null))
+    # Unpacked into a separate folder, renamed into place only when complete: a set-up that is
+    # stopped or fails halfway leaves nothing that looks like a usable SDK.
+    if (Test-Path -LiteralPath $SdkSetupFolder) { Remove-Item -LiteralPath $SdkSetupFolder -Recurse -Force }
+    $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File {0} -Channel 10.0 -InstallDir {1} -NoPath' -f (ConvertTo-Argument $Job.InstallScript), (ConvertTo-Argument $SdkSetupFolder)
+    Write-JobLine "> dotnet-install.ps1 -Channel 10.0 -InstallDir $SdkSetupFolder"
+    $Job.Runner = New-Object HomeControlBuilder.ProcessRunner -ArgumentList @($HostExe, $arguments, $null, (Get-ChildEnvironment $null))
     $Job.Stage = 'InstallingSdk'
     $Job.StageText = 'Downloading and unpacking. This can take a few minutes.'
 }
 
 function Complete-SdkSetup([int] $ExitCode) {
     try { Remove-Item -LiteralPath $Job.InstallScript -Force -ErrorAction SilentlyContinue } catch { }
+    if ($ExitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $SdkSetupFolder 'dotnet.exe'))) {
+        if (Test-Path -LiteralPath $OwnSdkFolder) { Remove-Item -LiteralPath $OwnSdkFolder -Recurse -Force }
+        Move-Item -LiteralPath $SdkSetupFolder -Destination $OwnSdkFolder
+        Write-JobLine "The .NET SDK is in $OwnSdkFolder."
+    }
+
     Find-DotNetSdk
     Update-SdkCard
     if ($Sdk.Path) {
@@ -998,6 +1062,11 @@ if ($NoGui) {
     catch {
         Write-Host "Error: $($_.Exception.Message)"
         exit 2
+    }
+    finally {
+        # Ctrl+C or an error: don't leave dotnet running unseen.
+        if ($Job.Busy -and $Job.Runner) { $Job.Runner.Kill() }
+        if ($Job.Log) { try { $Job.Log.Dispose() } catch { }; $Job.Log = $null }
     }
 
     if ($Job.Succeeded) { exit 0 }
@@ -1402,15 +1471,21 @@ $WindowXaml = @'
 # Appends the output collected since the last tick (one update per tick keeps it quick).
 function Flush-Output {
     if (-not $Ui -or $Ui.Pending.Length -eq 0) { return }
-    $Ui.LogBox.AppendText($Ui.Pending.ToString())
-    $Ui.LogBox.ScrollToEnd()
+    $box = $Ui.LogBox
+    $following = $box.VerticalOffset + $box.ViewportHeight -ge $box.ExtentHeight - 2 # unless scrolled up to read
+    $box.AppendText($Ui.Pending.ToString())
+    if ($following) { $box.ScrollToEnd() }
     [void]$Ui.Pending.Clear()
 }
 
 function Show-Details([bool] $Show) {
     $Ui.LogBox.Visibility = if ($Show) { 'Visible' } else { 'Collapsed' }
     $Ui.DetailsButton.Content = if ($Show) { 'Hide details' } else { 'Show details' }
-    if ($Show) { Show-InView $Ui.LogBox }
+    if ($Show) {
+        Show-InView $Ui.LogBox
+        $Ui.LogBox.UpdateLayout()
+        $Ui.LogBox.ScrollToEnd() # the latest output (the errors, after a failure)
+    }
 }
 
 # The window grows as the status and details appear: keep it within the screen.
@@ -1515,18 +1590,32 @@ function Show-Crash($ErrorRecord) {
     if ($Ui -and $Ui.ShowingError) { return } # e.g. the timer failing again behind the message
     $message = "$($ErrorRecord.Exception.Message)`n`n$($ErrorRecord.ScriptStackTrace)"
     try {
-        [void](New-Item -ItemType Directory -Force -Path $DataFolder)
-        Add-Content -LiteralPath $LogPath -Value "Builder error: $message" -Encoding UTF8
+        if ($Job.Log) {
+            $Job.Log.WriteLine("Builder error: $message")
+        }
+        else {
+            [void](New-Item -ItemType Directory -Force -Path $DataFolder)
+            Add-Content -LiteralPath $LogPath -Value "Builder error: $message" -Encoding UTF8
+        }
     }
     catch {
     }
 
+    # End the job: stop what it started, close its log, and say so in the window.
     if ($Job.Busy) {
         if ($Job.Runner) { try { $Job.Runner.Kill() } catch { } }
-        $Job.Busy = $false
-        $Job.Stage = 'Idle'
-        $Job.Runner = $null
-        try { Update-Buttons } catch { }
+        try {
+            Complete-Job $false 'Something went wrong in the builder' $ErrorRecord.Exception.Message
+        }
+        catch {
+            $Job.Busy = $false
+            $Job.Stage = 'Idle'
+            $Job.Runner = $null
+        }
+    }
+    elseif ($Job.Log) {
+        try { $Job.Log.Dispose() } catch { }
+        $Job.Log = $null
     }
 
     if ($SmokeTest) {
@@ -1552,6 +1641,18 @@ function Show-Crash($ErrorRecord) {
 
 try {
     Add-Type -TypeDefinition $NativeCode -Language CSharp
+
+    # One builder at a time: two builds would fight over the same files. A second double-click
+    # brings the open window forward instead.
+    if ($Interactive) {
+        $firstBuilder = $false
+        $BuilderMutex = New-Object Threading.Mutex($true, 'Local\HomeControl.Builder', [ref]$firstBuilder)
+        if (-not $firstBuilder) {
+            [void][HomeControlBuilder.Native]::Activate('Build Home Control')
+            exit 0
+        }
+    }
+
     $NativePlatform = Get-NativePlatform
     $Theme = Get-Theme
 
@@ -1620,7 +1721,8 @@ try {
             param($sender, $e)
             Invoke-Safely {
                 if ($Job.Busy) {
-                    if ($SmokeTest -or (Confirm-Action 'A build is running. Stop it and close?' $true)) {
+                    $what = if ($Job.Kind -eq 'Sdk') { 'The .NET SDK is being set up.' } else { 'A build is running.' }
+                    if ($SmokeTest -or (Confirm-Action "$what Stop it and close?" $true)) {
                         Stop-CurrentJob
                     }
                     else {

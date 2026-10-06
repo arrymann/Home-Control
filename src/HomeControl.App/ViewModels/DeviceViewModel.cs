@@ -18,10 +18,16 @@ public sealed class DeviceViewModel : BindableBase
     private bool _isOnline = true;
     private bool _isBusy;
     private bool _syncingToggle;
-    private string? _busyText;
+    private bool _isPending;
+    private bool _pendingTarget;
+    private CancellationTokenSource? _verify;
     private string? _error;
     private DateTimeOffset _lastUpdated = DateTimeOffset.MinValue;
     private long _lastCommandEnded;
+
+    /// <summary>When a device hasn't confirmed a command, it is asked again after these waits (about a minute in all).</summary>
+    private static readonly TimeSpan[] VerifyDelays =
+        [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(25)];
 
     internal DeviceViewModel(HomeViewModel owner, DeviceConfig config)
     {
@@ -89,12 +95,31 @@ public sealed class DeviceViewModel : BindableBase
             if (SetProperty(ref _isBusy, value))
             {
                 OnPropertyChanged(nameof(CanToggle));
-                OnPropertyChanged(nameof(Subtitle));
             }
         }
     }
 
-    public bool CanToggle => !_isBusy;
+    /// <summary>
+    /// A command was sent but the device hasn't reported its new state yet (TVs and other slow
+    /// devices). The toggle shows the requested state, greyed out, until the device confirms it.
+    /// </summary>
+    public bool IsPending
+    {
+        get => _isPending;
+        private set
+        {
+            if (SetProperty(ref _isPending, value))
+            {
+                OnPropertyChanged(nameof(CanToggle));
+                OnPropertyChanged(nameof(PendingText));
+            }
+        }
+    }
+
+    /// <summary>Tooltip while <see cref="IsPending"/>.</summary>
+    public string? PendingText => _isPending ? $"Waiting for {Label} to turn {(_pendingTarget ? "on" : "off")}…" : null;
+
+    public bool CanToggle => !_isBusy && !_isPending;
 
     public string? Error
     {
@@ -111,18 +136,21 @@ public sealed class DeviceViewModel : BindableBase
 
     public bool HasError => !string.IsNullOrEmpty(_error);
 
-    /// <summary>Second line of the row: room, progress/error/state, and the shortcut.</summary>
+    /// <summary>
+    /// Second line of the row: where the device is (its room, and its home when there are several)
+    /// and its shortcut. The toggle shows the state; problems (an error, offline) show here.
+    /// </summary>
     public string Subtitle
     {
         get
         {
-            var status = _isBusy ? _busyText
-                : HasError ? _error
-                : !_isOnline ? "Offline"
-                : _state switch { true => "On", false => "Off", null => null };
-            var room = _owner.ShowRooms ? _config.Room : null;
+            if (HasError)
+            {
+                return _error!;
+            }
 
-            return string.Join("  ·  ", new[] { room, status, HotkeyText }.Where(s => !string.IsNullOrEmpty(s)));
+            var offline = _isOnline ? null : "Offline";
+            return string.Join("  ·  ", new[] { _owner.LocationOf(_config), offline, HotkeyText }.Where(s => !string.IsNullOrEmpty(s)));
         }
     }
 
@@ -153,6 +181,16 @@ public sealed class DeviceViewModel : BindableBase
             return;
         }
 
+        if (_isPending)
+        {
+            if (status.Online && status.IsOn != _pendingTarget)
+            {
+                return; // not caught up yet; VerifyAsync keeps asking
+            }
+
+            StopVerifying();
+        }
+
         _lastUpdated = DateTimeOffset.UtcNow;
         IsOnline = status.Online;
         if (status.Online && _error is not null)
@@ -164,8 +202,11 @@ public sealed class DeviceViewModel : BindableBase
         SyncToggle(_state ?? false);
     }
 
-    /// <summary>Shows the result of a command sent without the row (by an automation).</summary>
-    internal void ApplyCommandResult(bool isOn)
+    /// <summary>
+    /// Shows the result of a command sent without the row (by an automation): the state, or the
+    /// wait for the device to confirm it.
+    /// </summary>
+    internal void ApplyCommandResult(bool turnOn, bool? reported)
     {
         if (_isBusy)
         {
@@ -173,15 +214,24 @@ public sealed class DeviceViewModel : BindableBase
         }
 
         _lastCommandEnded = Stopwatch.GetTimestamp(); // older reads mustn't undo this
-        _lastUpdated = DateTimeOffset.UtcNow;
         IsOnline = true;
         Error = null;
-        State = isOn;
-        SyncToggle(isOn);
+        if (reported == turnOn)
+        {
+            StopVerifying();
+            _lastUpdated = DateTimeOffset.UtcNow;
+            State = turnOn;
+        }
+        else
+        {
+            StartVerifying(turnOn);
+        }
+
+        SyncToggle(turnOn);
     }
 
     /// <summary>Flips the device (unknown state counts as off). Used by the global shortcut.</summary>
-    public Task<DeviceCommandResult?> ToggleAsync() => SetPowerAsync(!(_state ?? false));
+    public Task<DeviceCommandResult?> ToggleAsync() => SetPowerAsync(_isPending ? !_pendingTarget : !(_state ?? false));
 
     public async Task<DeviceCommandResult?> SetPowerAsync(bool turnOn)
     {
@@ -190,7 +240,7 @@ public sealed class DeviceViewModel : BindableBase
             return null;
         }
 
-        _busyText = turnOn ? "Turning on…" : "Turning off…";
+        StopVerifying(); // a new command replaces the wait for the last one
         IsBusy = true;
         Error = null;
         SyncToggle(turnOn);
@@ -201,9 +251,16 @@ public sealed class DeviceViewModel : BindableBase
             result = await _owner.Controller.SetPowerAsync(_config, turnOn, CancellationToken.None);
             if (result.Success)
             {
-                State = result.IsOn ?? turnOn;
                 IsOnline = true;
-                _lastUpdated = DateTimeOffset.UtcNow;
+                if (result.Confirms(turnOn))
+                {
+                    State = turnOn;
+                    _lastUpdated = DateTimeOffset.UtcNow;
+                }
+                else
+                {
+                    StartVerifying(turnOn); // accepted, but the device hasn't caught up yet
+                }
             }
             else
             {
@@ -224,7 +281,7 @@ public sealed class DeviceViewModel : BindableBase
         {
             _lastCommandEnded = Stopwatch.GetTimestamp();
             IsBusy = false;
-            SyncToggle(_state ?? false);
+            SyncToggle(_isPending ? _pendingTarget : _state ?? false);
         }
 
         return result;
@@ -233,12 +290,11 @@ public sealed class DeviceViewModel : BindableBase
     /// <summary>Asks the device's service whether it is on.</summary>
     public async Task RefreshStateAsync(CancellationToken cancellationToken)
     {
-        if (_isBusy)
+        if (_isBusy || _isPending)
         {
-            return;
+            return; // a pending command is being checked already
         }
 
-        _busyText = "Checking…";
         IsBusy = true;
         Error = null;
         try
@@ -274,6 +330,81 @@ public sealed class DeviceViewModel : BindableBase
         State = isOn;
         IsOnline = online;
         SyncToggle(isOn);
+    }
+
+    /// <summary>Smoke test only: show a command waiting for the device, without checking it.</summary>
+    internal void SimulatePending(bool turnOn)
+    {
+        _pendingTarget = turnOn;
+        State = null;
+        IsPending = true;
+        SyncToggle(turnOn);
+    }
+
+    /// <summary>Waits for the device to report <paramref name="target"/> (the toggle stays greyed meanwhile).</summary>
+    private void StartVerifying(bool target)
+    {
+        StopVerifying();
+        _pendingTarget = target;
+        State = null; // unknown until the device says
+        IsPending = true;
+        var verify = _verify = new CancellationTokenSource();
+        _ = VerifyAsync(target, verify);
+    }
+
+    private void StopVerifying()
+    {
+        _verify?.Cancel();
+        _verify = null;
+        IsPending = false;
+    }
+
+    /// <summary>Asks the device for its state a few times until it reports the requested one.</summary>
+    private async Task VerifyAsync(bool target, CancellationTokenSource verify)
+    {
+        bool? reported = null;
+        foreach (var delay in VerifyDelays)
+        {
+            try
+            {
+                await Task.Delay(delay, verify.Token);
+                var result = await _owner.Controller.QueryPowerAsync(_config, verify.Token);
+                if (verify.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (result.Success && result.IsOn is { } isOn)
+                {
+                    reported = isOn;
+                    if (isOn == target)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (verify.IsCancellationRequested)
+            {
+                return; // a new command, or a batch read confirmed it
+            }
+            catch (Exception ex)
+            {
+                Log.Info($"Checking {Label} after a command: {ex.Message}");
+            }
+        }
+
+        if (_verify != verify)
+        {
+            return;
+        }
+
+        // Confirmed, or it gave up: show what the device last said (still unknown: what was asked).
+        _verify = null;
+        IsPending = false;
+        _lastCommandEnded = Stopwatch.GetTimestamp(); // reads sent meanwhile mustn't undo this
+        _lastUpdated = DateTimeOffset.UtcNow;
+        State = reported;
+        SyncToggle(reported ?? target);
     }
 
     private void SyncToggle(bool value)

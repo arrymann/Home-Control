@@ -58,8 +58,10 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
     public AutomationsPage()
     {
         InitializeComponent();
-        NewButton.Flyout = CreateTemplateMenu();
-        AddNodeButton.Flyout = NodeCatalog.CreateMenu(entry => GraphCanvas.AddNode(entry.Create()), grouped: true);
+        void Add(NodeCatalog.Entry entry) => GraphCanvas.AddNode(entry.Create());
+        AddTriggerButton.Flyout = NodeCatalog.CreateMenu(NodeCategory.Trigger, Add);
+        AddConditionButton.Flyout = NodeCatalog.CreateMenu(NodeCategory.Condition, Add);
+        AddActionButton.Flyout = NodeCatalog.CreateMenu(NodeCategory.Action, Add);
         GraphCanvas.Changed += OnCanvasChanged;
         GraphCanvas.Message += (_, message) => ShowRunBar(InfoBarSeverity.Informational, null, message);
 
@@ -175,27 +177,12 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         EmptyText.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private MenuFlyout CreateTemplateMenu()
+    private void OnNewClick(object sender, RoutedEventArgs e)
     {
-        var menu = new MenuFlyout();
-        foreach (var template in Enum.GetValues<AutomationTemplate>())
-        {
-            var item = new MenuFlyoutItem { Text = AutomationTemplates.Title(template) };
-            item.Click += (_, _) =>
-            {
-                var automation = AutomationTemplates.Create(template, App.Host.Settings.Devices);
-                Service.Document.Automations.Add(automation);
-                Service.Save();
-                OpenEditor(automation.Id);
-            };
-            menu.Items.Add(item);
-            if (template == AutomationTemplate.Blank)
-            {
-                menu.Items.Add(new MenuFlyoutSeparator());
-            }
-        }
-
-        return menu;
+        var automation = AutomationTemplates.Create(AutomationTemplate.Blank, App.Host.Settings.Devices);
+        Service.Document.Automations.Add(automation);
+        Service.Save();
+        OpenEditor(automation.Id);
     }
 
     private void OnEditClick(object sender, RoutedEventArgs e)

@@ -32,6 +32,18 @@ internal static class NodeCatalog
         new(NodeCategory.Action, "PC power", "Lock, sleep, display off, shut down", () => new PcPowerActionNode()),
     ];
 
+    /// <summary>A menu of one category's node kinds (the editor's Trigger, Condition and Action buttons).</summary>
+    public static MenuFlyout CreateMenu(NodeCategory category, Action<Entry> pick)
+    {
+        var menu = new MenuFlyout();
+        foreach (var entry in All.Where(e => e.Category == category))
+        {
+            menu.Items.Add(Item(entry, pick));
+        }
+
+        return menu;
+    }
+
     /// <summary>A menu of node kinds: grouped in submenus, or flat (conditions and actions only) for wiring.</summary>
     public static MenuFlyout CreateMenu(Action<Entry> pick, bool grouped)
     {

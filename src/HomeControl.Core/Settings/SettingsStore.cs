@@ -86,6 +86,7 @@ public sealed class SettingsStore
         settings.GoogleHome.RefreshSeconds = Math.Clamp(settings.GoogleHome.RefreshSeconds, 3, 300);
         settings.Devices ??= [];
         settings.Devices.RemoveAll(d => d is null);
+        settings.CollapsedDeviceGroups = (settings.CollapsedDeviceGroups ?? []).Where(g => !string.IsNullOrEmpty(g)).Distinct().ToList();
 
         var seen = new HashSet<string>();
         foreach (var device in settings.Devices)

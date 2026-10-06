@@ -9,6 +9,7 @@ if errorlevel 1 goto failed
 exit /b 0
 
 :missing
+echo "%~dp0" | find /i ".zip" >nul && goto zipped
 echo The builder wasn't found: "%BUILDER%"
 echo Download the whole Home Control folder again, then try once more.
 echo.
@@ -18,6 +19,14 @@ exit /b 1
 :failed
 echo.
 echo The builder couldn't start. The message above says why.
+echo.
+pause
+exit /b 1
+
+:zipped
+echo Unzip Home Control first: right-click the downloaded .zip file and choose
+echo "Extract All". Then open the extracted folder and double-click
+echo "Build Home Control.cmd" there.
 echo.
 pause
 exit /b 1

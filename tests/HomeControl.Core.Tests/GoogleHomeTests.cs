@@ -279,6 +279,22 @@ public class GoogleHomeDeviceControllerTests
         Assert.Equal("The device is offline.", offline.Message);
     }
 
+    [Theory]
+    [InlineData(null)]  // no on/off state in the echo or the read-back
+    [InlineData(false)] // a slow device (a TV) still reports its old state
+    public async Task A_command_the_device_hasnt_confirmed_yet_succeeds_without_a_state(bool? reported)
+    {
+        var transport = new FakeFoyerTransport((_, _, _) => new FoyerResponse(200, Fixtures.Traits(("d1", true, reported))));
+        var controller = new GoogleHomeDeviceController(new GoogleHomeClient(transport));
+
+        var result = await controller.SetPowerAsync(Desk(), true, default);
+
+        Assert.True(result.Success);
+        Assert.Equal(reported, result.IsOn);
+        Assert.False(result.Confirms(true));
+        Assert.Equal("Sent “turn on” to Desk.", result.Message);
+    }
+
     [Fact]
     public async Task A_command_that_needs_a_confirmation_is_a_failure()
     {
@@ -409,6 +425,7 @@ public class GoogleHomeSyncTests
         Assert.Equal(["3d printer", "Backlight", "Desk", "Pc"], devices.Select(d => d.Name));
         Assert.All(devices, d => Assert.Equal(DeviceSource.GoogleHome, d.Source));
         Assert.All(devices, d => Assert.Equal("Living Room", d.Room));
+        Assert.All(devices, d => Assert.Equal("Pomki", d.Home));
         Assert.Equal(DeviceKind.Outlet, devices[0].Kind);
         Assert.Equal(DeviceKind.Light, devices[1].Kind); // user assigned "light" in Google Home
         Assert.Equal("p4", devices[3].PartnerDeviceId);

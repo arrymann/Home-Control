@@ -6,7 +6,14 @@ namespace HomeControl.Core.Devices;
 /// <param name="Success">False when the request failed or the service said it could not do it.</param>
 /// <param name="IsOn">The device state after the call, when known.</param>
 /// <param name="Message">A reply or an error description.</param>
-public sealed record DeviceCommandResult(bool Success, bool? IsOn, string Message);
+public sealed record DeviceCommandResult(bool Success, bool? IsOn, string Message)
+{
+    /// <summary>
+    /// The device reported the requested state. A slow device (a TV, say) can accept a command
+    /// and still report its old state, or none, for a while.
+    /// </summary>
+    public bool Confirms(bool turnOn) => Success && IsOn == turnOn;
+}
 
 /// <summary>Live state of a device as reported by its service.</summary>
 /// <param name="IsOn">On/off, or null when unknown.</param>

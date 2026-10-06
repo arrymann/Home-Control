@@ -59,6 +59,9 @@ public sealed class DeviceConfig
     /// <summary>Room in Google Home, if any.</summary>
     public string? Room { get; set; }
 
+    /// <summary>Home (structure) in Google Home, if known.</summary>
+    public string? Home { get; set; }
+
     /// <summary>Google Home device type, e.g. "action.devices.types.OUTLET".</summary>
     public string? GoogleHomeType { get; set; }
 

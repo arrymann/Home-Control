@@ -20,7 +20,7 @@ public sealed record GoogleHomeSyncResult(int Added, int Updated, int Missing, i
 public static class GoogleHomeSync
 {
     /// <summary>
-    /// Adds new on/off devices, refreshes names, rooms and ids of known ones, links devices
+    /// Adds new on/off devices, refreshes names, homes, rooms and ids of known ones, links devices
     /// that were added by name for Google Assistant, and flags devices that disappeared.
     /// The user's own choices (label, icon, shortcut, hidden, order) are kept.
     /// </summary>
@@ -29,7 +29,8 @@ public static class GoogleHomeSync
         int added = 0, updated = 0, linked = 0;
         var discovered = graph.Devices
             .Where(d => d.SupportsOnOff)
-            .OrderBy(d => d.Room ?? "￿", StringComparer.CurrentCultureIgnoreCase)
+            .OrderBy(d => d.HomeName, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(d => d.Room ?? "￿", StringComparer.CurrentCultureIgnoreCase)
             .ThenBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -88,12 +89,14 @@ public static class GoogleHomeSync
     /// <summary>Copies Google's data onto a configured device; returns true if anything changed.</summary>
     private static bool Apply(DeviceConfig device, GoogleHomeDevice found)
     {
+        var home = string.IsNullOrWhiteSpace(found.HomeName) ? null : found.HomeName.Trim();
         var changed =
             device.GoogleHomeId != found.Id ||
             device.Name != found.Name ||
             device.AgentId != found.AgentId ||
             device.PartnerDeviceId != found.PartnerDeviceId ||
             device.Room != found.Room ||
+            device.Home != home ||
             device.GoogleHomeType != found.EffectiveType ||
             device.Missing;
 
@@ -102,6 +105,7 @@ public static class GoogleHomeSync
         device.AgentId = found.AgentId;
         device.PartnerDeviceId = found.PartnerDeviceId;
         device.Room = found.Room;
+        device.Home = home;
         device.GoogleHomeType = found.EffectiveType;
         device.Missing = false;
         return changed;

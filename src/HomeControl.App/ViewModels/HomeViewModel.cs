@@ -21,7 +21,7 @@ public sealed class HomeViewModel : BindableBase
     private Task? _batchRead;
     private int _refreshesRunning;
     private bool _isSyncing;
-    private bool _showRooms;
+    private bool _showHomes;
     private string? _errorMessage;
     private bool _isErrorOpen;
     private CancellationTokenSource? _refreshCts;
@@ -102,8 +102,21 @@ public sealed class HomeViewModel : BindableBase
 
     public bool ShowDevices => IsConnected && Devices.Count > 0;
 
-    /// <summary>Rows show their room when the devices are spread over several rooms.</summary>
-    internal bool ShowRooms => _showRooms;
+    /// <summary>
+    /// Where a device is, for its row: the room, with the home in front when the devices are in
+    /// more than one home (the home alone when it has no room).
+    /// </summary>
+    internal string? LocationOf(DeviceConfig config)
+    {
+        var room = string.IsNullOrWhiteSpace(config.Room) ? null : config.Room.Trim();
+        var home = string.IsNullOrWhiteSpace(config.Home) ? null : config.Home.Trim();
+        if (room is null)
+        {
+            return home;
+        }
+
+        return _showHomes && home is not null ? $"{home} › {room}" : room;
+    }
 
     public bool IsRefreshing
     {
@@ -166,7 +179,7 @@ public sealed class HomeViewModel : BindableBase
     internal void LoadDevices(IReadOnlyList<DeviceConfig> configs)
     {
         var visible = configs.Where(c => !c.Hidden && !c.Missing).ToList();
-        var showRooms = visible.Select(c => c.Room).Where(r => !string.IsNullOrWhiteSpace(r)).Distinct(StringComparer.CurrentCultureIgnoreCase).Count() > 1;
+        var showHomes = visible.Select(c => c.Home?.Trim()).Where(h => !string.IsNullOrEmpty(h)).Distinct(StringComparer.CurrentCultureIgnoreCase).Count() > 1;
 
         var existing = Devices.Concat(_hidden.Values).ToDictionary(d => d.Id);
         DeviceViewModel Reuse(DeviceConfig config)
@@ -192,9 +205,9 @@ public sealed class HomeViewModel : BindableBase
             }
         }
 
-        if (showRooms != _showRooms)
+        if (showHomes != _showHomes)
         {
-            _showRooms = showRooms;
+            _showHomes = showHomes;
             foreach (var device in Devices)
             {
                 device.RefreshSubtitle();

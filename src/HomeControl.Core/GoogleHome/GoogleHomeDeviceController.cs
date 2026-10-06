@@ -29,8 +29,13 @@ public sealed class GoogleHomeDeviceController : IDeviceController, IBatchStateR
             return new DeviceCommandResult(false, state.IsOn, $"{device.Label.Trim()} is offline.");
         }
 
-        var isOn = state?.IsOn ?? turnOn;
-        return new DeviceCommandResult(true, isOn, $"{device.Label.Trim()} turned {(isOn ? "on" : "off")}.");
+        // What the device reports right after the command. Slow devices may still report their
+        // old state (or none): IsOn then isn't the requested state and callers wait for it.
+        var isOn = state?.IsOn;
+        var name = device.Label.Trim();
+        return new DeviceCommandResult(true, isOn, isOn == turnOn
+            ? $"{name} turned {(turnOn ? "on" : "off")}."
+            : $"Sent “turn {(turnOn ? "on" : "off")}” to {name}.");
     }
 
     public async Task<DeviceCommandResult> QueryPowerAsync(DeviceConfig device, CancellationToken cancellationToken)

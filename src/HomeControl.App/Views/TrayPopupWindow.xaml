@@ -193,7 +193,11 @@
                                         Visibility="{x:Bind helpers:Ui.VisibleIfText(Subtitle), Mode=OneWay}" />
                                 </StackPanel>
 
-                                <Grid Grid.Column="2" VerticalAlignment="Center">
+                                <Grid
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Background="Transparent"
+                                    ToolTipService.ToolTip="{x:Bind PendingText, Mode=OneWay}">
                                     <ProgressRing
                                         Width="16"
                                         Height="16"

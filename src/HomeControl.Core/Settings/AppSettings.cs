@@ -47,6 +47,9 @@ public sealed class AppSettings
     public bool UseAssistantFallback { get; set; } = true;
 
     public List<DeviceConfig> Devices { get; set; } = [];
+
+    /// <summary>Home and room groups collapsed on the Devices page (groups start expanded).</summary>
+    public List<string> CollapsedDeviceGroups { get; set; } = [];
 }
 
 /// <summary>Options for the Google Home web session (the home.google.com backend).</summary>

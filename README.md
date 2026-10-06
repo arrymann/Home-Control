@@ -2,7 +2,7 @@
 
 A small WinUI 3 tray app for switching your Google Home devices on and off.
 
-- **Left-click** the tray icon to open a flyout with a toggle for every device.
+- **Left-click** the tray icon to open a flyout with a toggle for every device. Under each name it shows the device's room, plus its home if you have more than one. The flyout opens next to the taskbar, on whichever edge the taskbar is.
 - **Right-click** for Refresh, Turn all off, Settings and Exit.
 - **Global shortcuts.** Give each device its own shortcut (for example `Ctrl + Alt + 1`), plus one that opens the flyout.
 - **Follows the Windows theme.** The tray icon matches the taskbar (white on a dark taskbar, black on a light one). The flyout and settings window follow the app light/dark mode and switch live when you change it.
@@ -19,7 +19,7 @@ Google's [Home APIs](https://developers.home.google.com/apis) only ship SDKs for
 Home Control signs in to [home.google.com](https://home.google.com) once, in a small browser window inside the app (Microsoft Edge WebView2). After that it keeps that page loaded in a hidden browser and sends the same requests the web app sends. Those requests go to Google's `googlehomefoyer-pa` API and are authorized from the page's own session.
 
 - **Devices are listed automatically.** Every device that can be turned on and off (lights, plugs, switches, TVs and so on) is added, with its room. Devices added later in Google Home appear at the next start or after **Sync now**. If a sync fails (no network yet, for example), it is retried once Google Home answers again or when you open the flyout.
-- **State is live.** The flyout reads every device's state in one request when it opens, and again every 10 seconds while it stays open. Offline devices are shown faded.
+- **State is live.** The flyout reads every device's state in one request when it opens, and again every 10 seconds while it stays open. Offline devices are shown faded. Some devices, such as TVs, take a while to act on a command. Until such a device reports its new state, its toggle stays greyed out in the new position. Home Control checks again for up to a minute.
 - **Your sign-in stays on this PC,** in a private browser profile for this app only: `%LOCALAPPDATA%\HomeControl\WebView2`. **Sign out** clears it. While you're signed out, devices from Google Home are switched through Google Assistant if it is set up.
 
 The catch: this is the private interface of Google's own website, not an API Google offers to other apps. It can stop working whenever Google changes the site. Google may also refuse to sign in inside an embedded browser ("This browser or app may not be secure"). Use it for your own home only. If it breaks, Google Assistant (below) can take over.
@@ -59,7 +59,7 @@ Sign-in uses the standard installed-app OAuth flow: your browser, a loopback red
 
 ## Automations
 
-Each automation is a small graph. **Triggers** (when) start it, **conditions** (if) choose a path through their *Yes* and *No* outputs, and **actions** (then) do the work. Wire nodes together by dragging from the dot on the right of one node to the dot on the left of the next. You can also drop a wire on an empty spot to add a connected node there. The editor has undo, zoom, and **Run now**, which runs the automation from a trigger and skips waits. Problems such as a missing device, a node that isn't connected, or sun times without a location are flagged on the nodes.
+Each automation is a small graph. **Triggers** (when) start it, **conditions** (if) choose a path through their *Yes* and *No* outputs, and **actions** (then) do the work. **Create** starts an empty automation. Add nodes with the editor's **Trigger**, **Condition** and **Action** buttons, or right-click the canvas. Wire nodes together by dragging from the dot on the right of one node to the dot on the left of the next. You can also drop a wire on an empty spot to add a connected node there. The editor has undo, zoom, and **Run now**, which runs the automation from a trigger and skips waits. Problems such as a missing device, a node that isn't connected, or sun times without a location are flagged on the nodes.
 
 | Node | Kind | What it does |
 |---|---|---|
@@ -127,7 +127,7 @@ dotnet test tests/HomeControl.Core.Tests
 | Left-click tray icon | Open or close the device flyout (Esc or clicking elsewhere closes it) |
 | Right-click tray icon | Refresh device states, Turn all off, Sync devices, Settings, Exit |
 | Device shortcut | Toggles that device; a notification confirms it (can be turned off) |
-| Settings › Devices | Sync from Google Home, show or hide devices in the tray, rename, reorder, record shortcuts, **Try it** buttons; add Assistant devices by name |
+| Settings › Devices | Devices grouped by home and room. Groups collapse, and Home Control remembers which. Sync from Google Home, show or hide devices in the tray, rename, record shortcuts, **Try it** buttons; add Assistant devices by name. **Move up/down** sets the order within a room, which is also the order in the flyout. |
 | Settings › Automations | Location, automation list and the node editor |
 | Settings › Account | Google Home sign-in and sync; Google Assistant setup, fallback, language and command phrases |
 | Settings › General | Theme, window material, flyout shortcut, notifications, start with Windows |

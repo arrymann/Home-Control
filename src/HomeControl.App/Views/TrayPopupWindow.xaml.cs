@@ -23,12 +23,11 @@ public sealed partial class TrayPopupWindow : Window
     private const double PopupWidth = 360;
     private const double ScreenMargin = 12;
 
-    private enum Edge { Bottom, Top, Left, Right }
 
     private readonly IntPtr _hwnd;
     private BackdropKind? _backdrop;
     private PointInt32 _anchor;
-    private Edge _edge;
+    private TaskbarEdge _edge;
     private bool _isOpen;
     private bool _allowClose;
     private bool _resizePending;
@@ -201,9 +200,10 @@ public sealed partial class TrayPopupWindow : Window
     /// <summary>Sizes the window to its content and places it next to the taskbar.</summary>
     private void UpdateBounds(bool beforeShow)
     {
-        var display = DisplayArea.GetFromPoint(_anchor, DisplayAreaFallback.Nearest);
-        var work = display.WorkArea;
-        _edge = GetTaskbarEdge(work, display.OuterBounds);
+        // Beside the taskbar, on whichever edge it is.
+        var placement = Taskbar.GetPlacement(_anchor);
+        var work = placement.Area;
+        _edge = placement.Edge;
 
         var scale = WindowHelpers.GetScaleForPoint(_anchor);
         var margin = (int)Math.Round(ScreenMargin * scale);
@@ -225,15 +225,15 @@ public sealed partial class TrayPopupWindow : Window
         int x, y;
         switch (_edge)
         {
-            case Edge.Top:
+            case TaskbarEdge.Top:
                 x = Clamp(_anchor.X - width / 2, work.X + margin, work.X + work.Width - width - margin);
                 y = work.Y + margin;
                 break;
-            case Edge.Left:
+            case TaskbarEdge.Left:
                 x = work.X + margin;
                 y = Clamp(_anchor.Y - height / 2, work.Y + margin, work.Y + work.Height - height - margin);
                 break;
-            case Edge.Right:
+            case TaskbarEdge.Right:
                 x = work.X + work.Width - width - margin;
                 y = Clamp(_anchor.Y - height / 2, work.Y + margin, work.Y + work.Height - height - margin);
                 break;
@@ -278,21 +278,12 @@ public sealed partial class TrayPopupWindow : Window
         return height;
     }
 
-    private static Edge GetTaskbarEdge(RectInt32 work, RectInt32 outer)
-    {
-        if (work.Y + work.Height < outer.Y + outer.Height) return Edge.Bottom;
-        if (work.Y > outer.Y) return Edge.Top;
-        if (work.X > outer.X) return Edge.Left;
-        if (work.X + work.Width < outer.X + outer.Width) return Edge.Right;
-        return Edge.Bottom; // auto-hide taskbar
-    }
-
     private static int Clamp(int value, int min, int max) => Math.Max(min, Math.Min(value, max));
 
     private void PlayShowAnimation()
     {
-        var horizontal = _edge is Edge.Left or Edge.Right;
-        var from = _edge is Edge.Top or Edge.Left ? -16.0 : 16.0;
+        var horizontal = _edge is TaskbarEdge.Left or TaskbarEdge.Right;
+        var from = _edge is TaskbarEdge.Top or TaskbarEdge.Left ? -16.0 : 16.0;
         SlideTransform.X = 0;
         SlideTransform.Y = 0;
 

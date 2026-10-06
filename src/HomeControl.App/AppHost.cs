@@ -195,6 +195,16 @@ internal sealed class AppHost
     /// <summary>Saves settings and applies them everywhere.</summary>
     public void SaveSettings()
     {
+        SaveSettingsQuietly();
+        Home.LoadDevices(Settings.Devices);
+        ApplyHotkeys();
+        ApplyAppearance();
+        SettingsApplied?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Saves settings that only remember how a page looks (nothing to apply).</summary>
+    public void SaveSettingsQuietly()
+    {
         try
         {
             if (!IsSmokeTest)
@@ -206,11 +216,6 @@ internal sealed class AppHost
         {
             Log.Error("Saving settings", ex);
         }
-
-        Home.LoadDevices(Settings.Devices);
-        ApplyHotkeys();
-        ApplyAppearance();
-        SettingsApplied?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Opens the popup next to the tray icon (or the taskbar corner when the icon is hidden).</summary>
@@ -559,7 +564,12 @@ internal sealed class AppHost
             return point;
         }
 
-        // Icon hidden in the overflow area: use the corner of the primary work area.
+        // Icon hidden in the overflow area: the tray end of the taskbar, wherever it is.
+        if (Taskbar.GetTrayCorner() is { } corner)
+        {
+            return corner;
+        }
+
         var work = DisplayArea.Primary.WorkArea;
         return new PointInt32(work.X + work.Width - 1, work.Y + work.Height - 1);
     }
@@ -567,8 +577,7 @@ internal sealed class AppHost
     private void ShowContextMenu(PointInt32 point)
     {
         _popup.Hide();
-        var taskbarAtBottom = DisplayArea.GetFromPoint(point, DisplayAreaFallback.Nearest) is var display &&
-                              display.WorkArea.Y + display.WorkArea.Height <= point.Y;
+        var taskbarAtBottom = Taskbar.GetPlacement(point).Edge == TaskbarEdge.Bottom;
 
         new ContextMenu()
             .Add("Open Home Control", ShowPopup, isDefault: true)

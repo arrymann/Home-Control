@@ -52,19 +52,20 @@ internal static class SmokeTest
 
         var kinds = Enum.GetValues<DeviceKind>();
         Hotkey Shortcut(int n) => new(HotkeyModifiers.Control | HotkeyModifiers.Alt, '0' + n);
-        DeviceConfig FromGoogleHome(string name, string room, DeviceKind kind, Hotkey? hotkey = null, bool hidden = false) => new()
+        DeviceConfig FromGoogleHome(string name, string room, DeviceKind kind, Hotkey? hotkey = null, bool hidden = false, string home = "Pomki") => new()
         {
             Source = DeviceSource.GoogleHome,
             GoogleHomeId = Guid.NewGuid().ToString(),
             Name = name,
             Room = room,
+            Home = home,
             Kind = kind,
             Hotkey = hotkey,
             Hidden = hidden,
         };
 
-        // A typical home: outlets, a light and a TV in two rooms, one device hidden,
-        // plus a scene added by name for Google Assistant.
+        // A typical home: outlets, a light and a TV in three rooms, one device hidden, a heater
+        // in a second home, plus a scene added by name for Google Assistant.
         List<DeviceConfig> samples =
         [
             FromGoogleHome("3d printer", "Living Room", DeviceKind.Outlet, Shortcut(1)),
@@ -74,6 +75,7 @@ internal static class SmokeTest
             FromGoogleHome("Living Room TV", "Living Room", DeviceKind.Tv),
             FromGoogleHome("Hallway", "Hallway", DeviceKind.Light, hidden: true),
             new DeviceConfig { Name = "Movie night", Kind = DeviceKind.Scene, Hotkey = Shortcut(3) },
+            FromGoogleHome("Heater", "Kitchen", DeviceKind.Heater, home: "Cottage"),
         ];
         host.Settings.Devices.AddRange(samples);
         host.Home.LoadDevices(host.Settings.Devices);
@@ -106,7 +108,8 @@ internal static class SmokeTest
             host.Home.Devices[1].SimulateState(false);
             host.Home.Devices[2].SimulateState(false);
             host.Home.Devices[3].SimulateState(true);
-            host.Home.Devices[4].SimulateState(false, online: false);
+            host.Home.Devices[4].SimulatePending(true); // the TV hasn't confirmed "turn on" yet: greyed toggle
+            host.Home.Devices[6].SimulateState(false, online: false);
         }, () => host.PopupWindowHandle, waitMs: 2500);
         await Step("flyout dark", () => SetTheme(ThemePreference.Dark), () => host.PopupWindowHandle);
 

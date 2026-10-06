@@ -266,7 +266,7 @@ internal sealed class AutomationService : IDisposable
             var result = await App.Controller.SetPowerAsync(config, turnOn, cancellationToken);
             if (result.Success)
             {
-                App.Home.Find(deviceId)?.ApplyCommandResult(result.IsOn ?? turnOn);
+                App.Home.Find(deviceId)?.ApplyCommandResult(turnOn, result.IsOn);
             }
 
             return result;
@@ -285,7 +285,7 @@ internal sealed class AutomationService : IDisposable
                     var result = await App.Controller.SetPowerAsync(device.Config, false, cancellationToken);
                     if (result.Success)
                     {
-                        device.ApplyCommandResult(result.IsOn ?? false);
+                        device.ApplyCommandResult(false, result.IsOn);
                     }
                     else
                     {

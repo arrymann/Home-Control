@@ -1,5 +1,6 @@
 using HomeControl.Core.Models;
 using HomeControl.Services;
+using HomeControl.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
@@ -9,13 +10,13 @@ namespace HomeControl.Views;
 /// <summary>A row on the Devices page.</summary>
 public sealed class DeviceListItem
 {
-    internal DeviceListItem(DeviceConfig config, int index, int count)
+    internal DeviceListItem(DeviceConfig config, bool canMoveUp, bool canMoveDown)
     {
         Id = config.Id;
         Label = config.Label.Trim();
         Kind = config.Kind;
-        CanMoveUp = index > 0;
-        CanMoveDown = index < count - 1;
+        CanMoveUp = canMoveUp;
+        CanMoveDown = canMoveDown;
         ShowInTray = !config.Hidden;
 
         // Discovered devices come back at the next sync, so they are hidden rather than removed.
@@ -29,11 +30,6 @@ public sealed class DeviceListItem
         }
         else if (config.IsGoogleHome)
         {
-            if (!string.IsNullOrWhiteSpace(config.Room))
-            {
-                parts.Add(config.Room.Trim());
-            }
-
             if (!string.IsNullOrWhiteSpace(config.DisplayName))
             {
                 parts.Add($"Google Home name: {config.Name.Trim()}");
@@ -72,6 +68,94 @@ public sealed class DeviceListItem
     public string RemoveToolTip { get; }
 }
 
+/// <summary>A home on the Devices page, with its rooms. Collapsing it hides the rooms.</summary>
+public sealed class DeviceHomeGroup : BindableBase
+{
+    private readonly Action<string, bool> _remember;
+    private bool _isExpanded;
+
+    internal DeviceHomeGroup(string key, string title, int deviceCount, IReadOnlyList<DeviceRoomGroup> rooms, bool isExpanded, Action<string, bool> remember)
+    {
+        Key = key;
+        Title = title;
+        Count = deviceCount == 1 ? "1 device" : $"{deviceCount} devices";
+        Rooms = rooms;
+        _isExpanded = isExpanded;
+        _remember = remember;
+    }
+
+    internal string Key { get; }
+
+    public string Title { get; }
+
+    public string Count { get; }
+
+    public IReadOnlyList<DeviceRoomGroup> Rooms { get; }
+
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set
+        {
+            if (SetProperty(ref _isExpanded, value))
+            {
+                OnPropertyChanged(nameof(Chevron));
+                OnPropertyChanged(nameof(RoomsVisibility));
+                OnPropertyChanged(nameof(ToggleText));
+                OnPropertyChanged(nameof(AccessibleName));
+                _remember(Key, value);
+            }
+        }
+    }
+
+    public string Chevron => _isExpanded ? "\uE70D" : "\uE76C";
+
+    public Visibility RoomsVisibility => _isExpanded ? Visibility.Visible : Visibility.Collapsed;
+
+    public string ToggleText => _isExpanded ? "Collapse" : "Expand";
+
+    public string AccessibleName => $"{Title}, {Count}, {(_isExpanded ? "expanded" : "collapsed")}";
+}
+
+/// <summary>A room on the Devices page: a collapsible group of devices.</summary>
+public sealed class DeviceRoomGroup : BindableBase
+{
+    private readonly Action<string, bool> _remember;
+    private bool _isExpanded;
+
+    internal DeviceRoomGroup(string key, string title, IReadOnlyList<DeviceListItem> devices, bool isExpanded, Action<string, bool> remember)
+    {
+        Key = key;
+        Title = title;
+        Devices = devices;
+        var hidden = devices.Count(d => !d.ShowInTray);
+        Description = (devices.Count == 1 ? "1 device" : $"{devices.Count} devices") + (hidden > 0 ? $"  ·  {hidden} not in the tray" : string.Empty);
+        _isExpanded = isExpanded;
+        _remember = remember;
+    }
+
+    internal string Key { get; }
+
+    public string Title { get; }
+
+    public string Description { get; }
+
+    public IReadOnlyList<DeviceListItem> Devices { get; }
+
+    /// <summary>Bound two-way to the expander.</summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set
+        {
+            if (SetProperty(ref _isExpanded, value))
+            {
+                _remember(Key, value);
+            }
+        }
+    }
+}
+
 public sealed partial class DevicesPage : Page
 {
     public DevicesPage()
@@ -98,12 +182,80 @@ public sealed partial class DevicesPage : Page
 
     private void OnSettingsApplied(object? sender, EventArgs e) => Refresh();
 
+    /// <summary>
+    /// Devices are grouped by home and room here (homes and rooms by name, unnamed ones last);
+    /// within a room they keep the tray's order, which Move up/down changes.
+    /// </summary>
+    private static string GroupKey(DeviceConfig device) => RoomKey(Clean(device.Home), Clean(device.Room));
+
+    private static string HomeKey(string? home) => "home:" + home;
+
+    private static string RoomKey(string? home, string? room) => "room:" + home + "\u001f" + room;
+
+    private static string? Clean(string? name) => string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+
+    private List<DeviceHomeGroup> BuildGroups(IReadOnlyList<DeviceConfig> devices)
+    {
+        var collapsed = App.Host.Settings.CollapsedDeviceGroups.ToHashSet();
+        var comparer = StringComparer.CurrentCultureIgnoreCase;
+        var hasHomes = devices.Any(d => Clean(d.Home) is not null);
+
+        return devices
+            .GroupBy(d => Clean(d.Home), comparer)
+            .OrderBy(g => g.Key is null)
+            .ThenBy(g => g.Key, comparer)
+            .Select(home =>
+            {
+                var rooms = home
+                    .GroupBy(d => Clean(d.Room), comparer)
+                    .OrderBy(g => g.Key is null)
+                    .ThenBy(g => g.Key, comparer)
+                    .Select(room =>
+                    {
+                        var members = room.ToList();
+                        var items = members.Select((d, i) => new DeviceListItem(d, i > 0, i < members.Count - 1)).ToList();
+                        var key = RoomKey(home.Key, room.Key);
+                        var title = room.Key ?? "No room";
+                        return new DeviceRoomGroup(key, title, items, !collapsed.Contains(key), RememberGroup);
+                    })
+                    .ToList();
+                var homeKey = HomeKey(home.Key);
+                var homeTitle = home.Key ?? (hasHomes ? "Other devices" : "Devices");
+                return new DeviceHomeGroup(homeKey, homeTitle, home.Count(), rooms, !collapsed.Contains(homeKey), RememberGroup);
+            })
+            .ToList();
+    }
+
+    /// <summary>Saves which groups are collapsed (all start expanded).</summary>
+    private static void RememberGroup(string key, bool isExpanded)
+    {
+        var collapsed = App.Host.Settings.CollapsedDeviceGroups;
+        var changed = isExpanded ? collapsed.Remove(key) : !collapsed.Contains(key);
+        if (!isExpanded && changed)
+        {
+            collapsed.Add(key);
+        }
+
+        if (changed)
+        {
+            App.Host.SaveSettingsQuietly();
+        }
+    }
+
+    private void OnHomeHeaderClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is DeviceHomeGroup home)
+        {
+            home.IsExpanded = !home.IsExpanded;
+        }
+    }
+
     private void OnAccountChanged(object? sender, EventArgs e) => DispatcherQueue.TryEnqueue(Refresh);
 
     private void Refresh()
     {
         var devices = App.Host.Settings.Devices;
-        DeviceList.ItemsSource = devices.Select((d, i) => new DeviceListItem(d, i, devices.Count)).ToList();
+        HomeList.ItemsSource = BuildGroups(devices);
         ListHeader.Visibility = devices.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         SignInInfo.IsOpen = !App.Host.Home.IsConnected;
         UpdateSyncCard();
@@ -228,12 +380,25 @@ public sealed partial class DevicesPage : Page
 
     private void OnMoveDownClick(object sender, RoutedEventArgs e) => Move(sender, +1);
 
+    /// <summary>Swaps the device with its neighbour in the same room (the tray shows that order).</summary>
     private void Move(object sender, int offset)
     {
         var devices = App.Host.Settings.Devices;
         var index = IndexOf(sender);
+        if (index < 0)
+        {
+            return;
+        }
+
+        var group = GroupKey(devices[index]);
         var target = index + offset;
-        if (index < 0 || target < 0 || target >= devices.Count)
+        while (target >= 0 && target < devices.Count &&
+               !string.Equals(GroupKey(devices[target]), group, StringComparison.CurrentCultureIgnoreCase))
+        {
+            target += offset;
+        }
+
+        if (target < 0 || target >= devices.Count)
         {
             return;
         }
