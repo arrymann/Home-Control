@@ -277,7 +277,7 @@
                                         Text="{x:Bind Subtitle, Mode=OneWay}"
                                         TextTrimming="CharacterEllipsis"
                                         TextWrapping="NoWrap"
-                                        ToolTipService.ToolTip="{x:Bind Error, Mode=OneWay}"
+                                        ToolTipService.ToolTip="{x:Bind SubtitleTip, Mode=OneWay}"
                                         Visibility="{x:Bind helpers:Ui.VisibleIfText(Subtitle), Mode=OneWay}" />
                                 </StackPanel>
 

@@ -27,10 +27,11 @@ public sealed class GoogleHomeDeviceController : IDeviceController, IBatchStateR
         }
 
         // What the device reports right after the command. Slow devices may still report their
-        // old state (or none): IsOn then isn't the requested state and callers wait for it.
-        var isOn = state?.IsOn;
+        // old state (or none): IsOn then isn't the requested state and callers wait for it. A
+        // device that never reports on/off can't confirm anything: taking the command is all.
+        var isOn = state is { CommandOnly: true } ? turnOn : state?.IsOn;
         var name = device.Label.Trim();
-        return new DeviceCommandResult(true, isOn, isOn == turnOn
+        return new DeviceCommandResult(true, isOn, isOn == turnOn && state is not { CommandOnly: true }
             ? $"{name} turned {(turnOn ? "on" : "off")}."
             : $"Sent “turn {(turnOn ? "on" : "off")}” to {name}.");
     }

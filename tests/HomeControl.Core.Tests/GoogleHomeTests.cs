@@ -131,6 +131,66 @@ public class FoyerCodecTests
         Assert.Equal(new GoogleHomeDeviceState("d3", null, null, null), states[2]);
     }
 
+    [Theory]
+    [InlineData(0, true)]   // as captured from home.google.com: a normal on/off device
+    [InlineData(1, null)]   // the integration can't report on/off: the value isn't a state
+    public void The_command_only_attribute_decides_whether_on_off_is_a_state(int commandOnly, bool? isOn)
+    {
+        var json = $$"""[[[["d1"],[["deviceStatus",[["online",[null,null,null,1]],["onlineStateDetails",[null,null,"stateOnline"]]]],["onOff",[["onOff",[null,null,null,1]]],[[["commandOnlyOnOff",[null,null,null,{{commandOnly}}]]]]]]]]]""";
+
+        var state = Assert.Single(FoyerCodec.ParseTraits(json));
+
+        Assert.Equal(new GoogleHomeDeviceState("d1", true, isOn, null) { CommandOnly = commandOnly == 1 }, state);
+    }
+
+    [Theory]
+    [InlineData("0", "0", false)]    // offline everywhere
+    [InlineData("0", "null", null)]  // offline and unknown: unknown, as Google's Home APIs have it
+    [InlineData("0", "1", true)]     // online through one integration
+    public void Several_records_are_online_by_googles_rule(string first, string second, bool? online)
+    {
+        static string Record(string flag) => flag == "null"
+            ? """[["tv"],[["onOff",[["onOff",[null,null,null,1]]]]]]"""
+            : $$"""[["tv"],[["deviceStatus",[["online",[null,null,null,{{flag}}]]]]]]""";
+
+        var state = Assert.Single(FoyerCodec.ParseTraits($"[[{Record(first)},{Record(second)}]]"));
+
+        Assert.Equal(online, state.Online);
+    }
+
+    [Fact]
+    public void Describes_tv_like_devices_without_their_local_auth_token()
+    {
+        static string Record(string id, string agent, string name, string type, string traits)
+        {
+            var slots = Enumerable.Repeat("null", 39).ToArray();
+            slots[0] = $"[\"{id}\",[\"{agent}\",\"{id}-p\"]]";
+            slots[3] = $"\"{name}\"";
+            slots[5] = $"\"{type}\"";
+            slots[6] = $"[{traits}]";
+            slots[27] = "\"SECRET-LOCAL-TOKEN\"";
+            slots[38] = "[[[1,\"other-id\"]]]";
+            return $"[{string.Join(",", slots)}]";
+        }
+
+        var json = $$"""
+            ["1",[["home","Home",null,null,null,[],[
+              {{Record("tv", "maker-agent", "Living Room TV", "action.devices.types.TV", "\"action.devices.traits.OnOff\"")}},
+              {{Record("box", "cast-agent", "Streamer", "action.devices.types.OUTLET", "\"action.devices.traits.MediaState\"")}},
+              {{Record("lamp", "maker-agent", "Lamp", "action.devices.types.LIGHT", "\"action.devices.traits.OnOff\"")}}]]],
+             null,null,null,null,null,null,[["maker-agent","Acme TV","https://example.com/icon.png"]]]
+            """;
+
+        var described = FoyerCodec.DescribeMediaDevices(json);
+
+        Assert.Equal(new[] { "tv", "box" }, described.Select(d => d.Id));
+        Assert.StartsWith("integration \"Acme TV\";", described[0].Text);
+        Assert.Contains("Living Room TV", described[0].Text);
+        Assert.Contains("other-id", described[0].Text);
+        Assert.StartsWith("integration \"?\";", described[1].Text);
+        Assert.DoesNotContain("SECRET", string.Concat(described.Select(d => d.Text)));
+    }
+
     [Fact]
     public void Tolerates_unexpected_shapes()
     {
@@ -138,6 +198,8 @@ public class FoyerCodecTests
         Assert.Empty(FoyerCodec.ParseHomeGraph("""[null,"not a home"]""").Homes);
         Assert.Empty(FoyerCodec.ParseTraits("{}"));
         Assert.Empty(FoyerCodec.ParseTraits("[[1,2,\"x\"]]"));
+        Assert.Empty(FoyerCodec.DescribeMediaDevices("[]"));
+        Assert.Empty(FoyerCodec.DescribeMediaDevices("""[null,[["h","H",null,null,null,null,[[null],["x"]]]],null,null,null,null,null,null,[1,[2]]]"""));
     }
 
     [Theory]
@@ -236,6 +298,31 @@ public class GoogleHomeClientTests
     }
 
     [Fact]
+    public async Task Logs_what_google_says_about_tvs_once_per_change()
+    {
+        var tvOn = true;
+        var transport = new FakeFoyerTransport((_, method, _) => method == "GetHomeGraph"
+            ? new FoyerResponse(200, Fixtures.HomeGraphList)
+            : new FoyerResponse(200, Fixtures.Traits((Fixtures.TvId, true, tvOn), (Fixtures.DeskId, true, true))));
+        var traced = new List<string>();
+        var client = new GoogleHomeClient(transport) { Trace = traced.Add };
+
+        await client.GetHomeGraphAsync(default);
+        await client.GetHomeGraphAsync(default);
+        await client.GetStatesAsync([Fixtures.TvId, Fixtures.DeskId], default);
+        await client.GetStatesAsync([Fixtures.TvId, Fixtures.DeskId], default);
+        tvOn = false;
+        await client.GetStatesAsync([Fixtures.TvId, Fixtures.DeskId], default);
+
+        Assert.Equal(3, traced.Count); // the TV in the device list, then each TV reading; never the online desk
+        Assert.Contains($"TV-like device {Fixtures.TvId}", traced[0]);
+        Assert.Contains("Living Room TV", traced[0]);
+        Assert.Contains("on=True", traced[1]);
+        Assert.Contains("on=False", traced[2]);
+        Assert.DoesNotContain(traced, line => line.Contains(Fixtures.DeskId));
+    }
+
+    [Fact]
     public async Task States_are_requested_in_chunks_without_duplicates()
     {
         var transport = new FakeFoyerTransport((_, _, body) =>
@@ -296,6 +383,22 @@ public class GoogleHomeDeviceControllerTests
     }
 
     [Fact]
+    public async Task A_device_that_cant_report_on_off_is_switched_without_waiting()
+    {
+        var reply = """[[[["d1"],[["deviceStatus",[["online",[null,null,null,1]]]],["onOff",[["onOff",[null,null,null,0]]],[[["commandOnlyOnOff",[null,null,null,1]]]]]]]]]""";
+        var transport = new FakeFoyerTransport((_, _, _) => new FoyerResponse(200, reply));
+        var controller = new GoogleHomeDeviceController(new GoogleHomeClient(transport));
+
+        var command = await controller.SetPowerAsync(Desk(), true, default);
+        var batch = await controller.ReadStatesAsync([Desk()], default);
+
+        Assert.True(command.Confirms(true));
+        Assert.Equal("Sent “turn on” to Desk.", command.Message);
+        Assert.Single(transport.Calls, c => c.Method == "UpdateTraits");
+        Assert.Equal(new DeviceStatus(null, true), batch.Values.Single()); // its last command stays shown
+    }
+
+    [Fact]
     public async Task Googles_on_off_value_counts_even_when_it_lists_the_device_offline()
     {
         // Google can list a TV that is on as offline (the Google Home app shows it on).
@@ -317,7 +420,7 @@ public class GoogleHomeDeviceControllerTests
     }
 
     [Fact]
-    public void Several_records_for_one_device_are_merged_like_the_google_home_app()
+    public void Several_records_for_one_device_are_merged()
     {
         // A TV known through two integrations: the maker's cloud says offline, the Chromecast says on.
         var body = """

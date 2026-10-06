@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using HomeControl.Core.Models;
 
 namespace HomeControl.Core.GoogleHome;
 
@@ -38,7 +39,14 @@ public sealed record GoogleHomeGraph(IReadOnlyList<GoogleHomeHome> Homes, IReadO
 /// <param name="Online">Null when the response did not say.</param>
 /// <param name="IsOn">Null when the device has no on/off state in the response.</param>
 /// <param name="Error">A device-level error code such as "deviceOffline", if reported.</param>
-public sealed record GoogleHomeDeviceState(string Id, bool? Online, bool? IsOn, string? Error);
+public sealed record GoogleHomeDeviceState(string Id, bool? Online, bool? IsOn, string? Error)
+{
+    /// <summary>
+    /// The device takes on/off commands but doesn't report whether it is on (its integration sets
+    /// the <c>commandOnlyOnOff</c> attribute); <see cref="IsOn"/> is then null.
+    /// </summary>
+    public bool CommandOnly { get; init; }
+}
 
 /// <summary>
 /// Builds and parses the wire format of the private Google Home web API ("Foyer", the backend
@@ -185,10 +193,18 @@ public static class FoyerCodec
     /// <c>[[ [[id],[[traitName,[[field,wrapper],…]],…]], … ]]</c>.
     /// </summary>
     /// <remarks>
-    /// One device can come back as several records (one per integration, e.g. a TV's Chromecast
-    /// built-in and its maker's cloud), or with a trait more than once. They are merged as the
-    /// Google Home app shows them: online if any record is online, and the on/off value from an
-    /// online record when there is one.
+    /// <para>
+    /// A trait is <c>[name, [[field, wrapper], …], attributes]</c>; the attributes are a protobuf
+    /// Struct, <c>[[[key, wrapper], …]]</c>. When the on/off trait has <c>commandOnlyOnOff</c>,
+    /// its value isn't a reported state, so it is ignored.
+    /// </para>
+    /// <para>
+    /// Nobody has seen one device come back as several records (one per integration, say a TV's
+    /// Chromecast built-in and its maker's cloud) or with a trait twice, but the format allows
+    /// it. Such records are merged by the rule of Google's Home APIs
+    /// (<c>HasConnectivityState</c>): online when any record is, offline when all are, unknown
+    /// otherwise; the on/off value comes from a record that isn't offline when there is one.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<GoogleHomeDeviceState> ParseTraits(string json)
     {
@@ -205,6 +221,7 @@ public static class FoyerCodec
             }
 
             bool? online = null, isOn = null;
+            var commandOnly = false;
             string? error = null, challenge = null;
             foreach (var trait in Items(At(result, 1)))
             {
@@ -236,11 +253,16 @@ public static class FoyerCodec
                             isOn ??= Bool(onOffWrapper);
                         }
 
+                        if (Attributes(trait).TryGetValue("commandOnlyOnOff", out var commandOnlyWrapper) && Bool(commandOnlyWrapper) == true)
+                        {
+                            commandOnly = true;
+                        }
+
                         break;
                 }
             }
 
-            states.Add(new GoogleHomeDeviceState(id, online, isOn, error ?? challenge));
+            states.Add(new GoogleHomeDeviceState(id, online, commandOnly ? null : isOn, error ?? challenge) { CommandOnly = commandOnly });
         }
 
         return states.GroupBy(s => s.Id, StringComparer.Ordinal).Select(Merge).ToList();
@@ -255,13 +277,13 @@ public static class FoyerCodec
         }
 
         var online = records.Any(r => r.Online == true) ? true
-            : records.Any(r => r.Online == false) ? false
+            : records.All(r => r.Online == false) ? false
             : (bool?)null;
         var reachable = records.Where(r => r.Online != false).ToList();
         var isOn = reachable.Select(r => r.IsOn).FirstOrDefault(v => v.HasValue)
                    ?? records.Select(r => r.IsOn).FirstOrDefault(v => v.HasValue);
         var error = (online == true ? reachable : records.ToList()).Select(r => r.Error).FirstOrDefault(e => e is not null);
-        return new GoogleHomeDeviceState(records.Key, online, isOn, error);
+        return new GoogleHomeDeviceState(records.Key, online, isOn, error) { CommandOnly = records.All(r => r.CommandOnly) };
     }
 
     /// <summary>The raw JSON of each device's records in a <c>GetTraits</c>/<c>UpdateTraits</c> response (for diagnostics).</summary>
@@ -281,6 +303,59 @@ public static class FoyerCodec
 
         return raw;
     }
+
+    /// <summary>
+    /// What <c>GetHomeGraph</c> says about each TV-like device (by type, or by a media trait), for
+    /// diagnostics: the slots that show which integration a TV comes through and whether Google
+    /// lists it twice. The device's local auth token (dev[27]) is never included.
+    /// </summary>
+    public static IReadOnlyList<(string Id, string Text)> DescribeMediaDevices(string json)
+    {
+        using var document = JsonDocument.Parse(StripXssiPrefix(json));
+        var root = document.RootElement;
+
+        // [8]: the integrations, [[agentId, label, iconUrl], …].
+        var integrations = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var integration in Items(At(root, 8)))
+        {
+            if (Str(At(integration, 0)) is { } agentId && Str(At(integration, 1)) is { } label)
+            {
+                integrations[agentId] = label;
+            }
+        }
+
+        var described = new List<(string, string)>();
+        foreach (var home in EnumerateHomes(At(root, 1)))
+        {
+            foreach (var record in Items(At(home, 6)))
+            {
+                var key = At(record, 0);
+                if (Str(At(key, 0)) is not { } deviceId)
+                {
+                    continue;
+                }
+
+                var types = new[] { Str(At(record, 5)), Str(At(At(record, 20), 0)) };
+                var traits = All(At(record, 6)).Select(t => Str(t)).ToList();
+                var isMedia = types.Any(t => GoogleHomeTypes.ToKind(t) == DeviceKind.Tv) ||
+                              traits.Any(t => t is not null && MediaTraits.Any(m => t.EndsWith(m, StringComparison.OrdinalIgnoreCase)));
+                if (!isMedia)
+                {
+                    continue;
+                }
+
+                var agentId = Str(At(At(key, 1), 0));
+                var integration = agentId is not null && integrations.TryGetValue(agentId, out var label) ? label : "?";
+                var slots = new[] { 0, 3, 5, 6, 16, 20, 28, 38 }
+                    .Select(i => $"[{i}]={Raw(At(record, i))}");
+                described.Add((deviceId, $"integration \"{integration}\"; {string.Join(" ", slots)}"));
+            }
+        }
+
+        return described;
+    }
+
+    private static readonly string[] MediaTraits = [".MediaState", ".AppSelector", ".Channel", ".InputSelector", ".TransportControl"];
 
     /// <summary>Reads an RPC error body such as <c>[3,"Invalid argument"]</c>.</summary>
     public static bool TryParseError(string body, out int code, out string message)
@@ -330,6 +405,24 @@ public static class FoyerCodec
         }
 
         return fields;
+    }
+
+    /// <summary>A trait's attributes (index 2): a Struct <c>[[[key, wrapper], …]]</c>, or a bare list of entries.</summary>
+    private static Dictionary<string, JsonElement> Attributes(JsonElement trait)
+    {
+        var attributes = Fields(At(trait, 2));
+        foreach (var (name, wrapper) in Fields(At(At(trait, 2), 0)))
+        {
+            attributes.TryAdd(name, wrapper);
+        }
+
+        return attributes;
+    }
+
+    private static string Raw(JsonElement? node)
+    {
+        var text = node?.GetRawText() ?? "null";
+        return text.Length <= 600 ? text : text[..600] + "…";
     }
 
     private static JsonArray BoolWrapper(bool value) => new(null, null, null, JsonValue.Create(value ? 1 : 0));

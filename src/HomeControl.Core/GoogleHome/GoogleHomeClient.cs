@@ -50,6 +50,7 @@ public sealed class GoogleHomeClient
 
     private readonly IFoyerTransport _transport;
     private readonly Dictionary<string, string> _traced = new(StringComparer.Ordinal);
+    private HashSet<string> _mediaIds = new(StringComparer.Ordinal);
 
     public GoogleHomeClient(IFoyerTransport transport)
     {
@@ -57,8 +58,9 @@ public sealed class GoogleHomeClient
     }
 
     /// <summary>
-    /// Gets the raw records of devices Google reports as offline or with an error, once per
-    /// change, so a wrong reading can be looked into (the app writes them to its log).
+    /// Gets raw readings, once per change, so a wrong one can be looked into (the app writes them
+    /// to its log): what the device list says about TVs, and the state records of TVs and of
+    /// devices Google reports as offline, with an error, or as not reporting on/off.
     /// </summary>
     public Action<string>? Trace { get; set; }
 
@@ -66,7 +68,9 @@ public sealed class GoogleHomeClient
     {
         var body = await CallAsync(FoyerCodec.StructuresService, FoyerCodec.GetHomeGraphMethod, FoyerCodec.BuildGetHomeGraph(), cancellationToken)
             .ConfigureAwait(false);
-        return Parse(() => FoyerCodec.ParseHomeGraph(body));
+        var graph = Parse(() => FoyerCodec.ParseHomeGraph(body));
+        TraceMediaDevices(body);
+        return graph;
     }
 
     public async Task<IReadOnlyList<GoogleHomeDeviceState>> GetStatesAsync(IReadOnlyCollection<string> deviceIds, CancellationToken cancellationToken)
@@ -77,7 +81,7 @@ public sealed class GoogleHomeClient
             var body = await CallAsync(FoyerCodec.HomeControlService, FoyerCodec.GetTraitsMethod, FoyerCodec.BuildGetTraits(chunk), cancellationToken)
                 .ConfigureAwait(false);
             var parsed = Parse(() => FoyerCodec.ParseTraits(body));
-            TraceUnusual(body, parsed);
+            TraceStates(body, parsed);
             states.AddRange(parsed);
         }
 
@@ -93,7 +97,7 @@ public sealed class GoogleHomeClient
             .ConfigureAwait(false);
 
         var echoes = Parse(() => FoyerCodec.ParseTraits(body));
-        TraceUnusual(body, echoes);
+        TraceStates(body, echoes);
         var echoed = echoes.FirstOrDefault(s => s.Id == deviceId);
         if (echoed is { IsOn: not null } or { Error: not null })
         {
@@ -104,9 +108,41 @@ public sealed class GoogleHomeClient
         return readBack.FirstOrDefault(s => s.Id == deviceId) ?? echoed;
     }
 
-    private void TraceUnusual(string body, IReadOnlyList<GoogleHomeDeviceState> states)
+    private void TraceMediaDevices(string body)
     {
-        if (Trace is not { } trace || !states.Any(s => s.Online == false || s.Error is not null))
+        if (Trace is not { } trace)
+        {
+            return;
+        }
+
+        try
+        {
+            var media = FoyerCodec.DescribeMediaDevices(body);
+            _mediaIds = new HashSet<string>(media.Select(m => m.Id), StringComparer.Ordinal);
+            foreach (var (id, text) in media)
+            {
+                if (IsNew("graph " + id, text))
+                {
+                    trace($"Google Home lists TV-like device {id}: {text}");
+                }
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Diagnostics only.
+        }
+    }
+
+    private void TraceStates(string body, IReadOnlyList<GoogleHomeDeviceState> states)
+    {
+        if (Trace is not { } trace)
+        {
+            return;
+        }
+
+        var mediaIds = _mediaIds;
+        var traced = states.Where(s => s.Online == false || s.Error is not null || s.CommandOnly || mediaIds.Contains(s.Id)).ToList();
+        if (traced.Count == 0)
         {
             return;
         }
@@ -114,26 +150,35 @@ public sealed class GoogleHomeClient
         try
         {
             var raw = FoyerCodec.RawTraitsById(body);
-            foreach (var state in states.Where(s => s.Online == false || s.Error is not null))
+            foreach (var state in traced)
             {
                 var record = raw.GetValueOrDefault(state.Id, "?");
                 record = record.Length <= 4000 ? record : record[..4000] + "…";
-                lock (_traced)
+                if (IsNew(state.Id, record))
                 {
-                    if (_traced.TryGetValue(state.Id, out var last) && last == record)
-                    {
-                        continue;
-                    }
-
-                    _traced[state.Id] = record;
+                    trace($"Google Home device {state.Id}: online={state.Online?.ToString() ?? "?"}, on={state.IsOn?.ToString() ?? "?"}" +
+                          $"{(state.CommandOnly ? " (command-only)" : "")}, error={state.Error ?? "none"}. Raw: {record}");
                 }
-
-                trace($"Google Home device {state.Id}: online={state.Online?.ToString() ?? "?"}, on={state.IsOn?.ToString() ?? "?"}, error={state.Error ?? "none"}. Raw: {record}");
             }
         }
         catch (System.Text.Json.JsonException)
         {
             // Diagnostics only.
+        }
+    }
+
+    /// <summary>True the first time <paramref name="text"/> is seen for <paramref name="key"/> (and whenever it changes).</summary>
+    private bool IsNew(string key, string text)
+    {
+        lock (_traced)
+        {
+            if (_traced.TryGetValue(key, out var last) && last == text)
+            {
+                return false;
+            }
+
+            _traced[key] = text;
+            return true;
         }
     }
 

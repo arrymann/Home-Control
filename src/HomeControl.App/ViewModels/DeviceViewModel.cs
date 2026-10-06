@@ -72,6 +72,7 @@ public sealed class DeviceViewModel : BindableBase
             if (SetProperty(ref _isOnline, value))
             {
                 OnPropertyChanged(nameof(Subtitle));
+                OnPropertyChanged(nameof(SubtitleTip));
             }
         }
     }
@@ -144,6 +145,7 @@ public sealed class DeviceViewModel : BindableBase
             {
                 OnPropertyChanged(nameof(HasError));
                 OnPropertyChanged(nameof(Subtitle));
+                OnPropertyChanged(nameof(SubtitleTip));
             }
         }
     }
@@ -167,6 +169,11 @@ public sealed class DeviceViewModel : BindableBase
             return string.Join("  ·  ", new[] { _owner.LocationOf(_config), offline, HotkeyText }.Where(s => !string.IsNullOrEmpty(s)));
         }
     }
+
+    /// <summary>Tooltip of the second line: the whole error, or what "Offline" means.</summary>
+    public string? SubtitleTip => HasError ? _error
+        : _isOnline ? null
+        : "Google Home's cloud lists this device as offline. Commands are still sent, and the switch shows the last on/off Google has for it, if any.";
 
     /// <summary>True when the state is older than <paramref name="maxAge"/> (or unknown).</summary>
     internal bool IsStale(TimeSpan maxAge) => DateTimeOffset.UtcNow - _lastUpdated > maxAge;
