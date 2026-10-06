@@ -15,7 +15,7 @@ public sealed partial class GeneralPage : Page
     public GeneralPage()
     {
         InitializeComponent();
-        PopupShortcut.Validate = hotkey => App.Host.ValidateHotkey(hotkey, deviceId: null, isPopupHotkey: true);
+        PopupShortcut.Validate = hotkey => App.Host.ValidateHotkey(hotkey, ownerId: null, isPopupHotkey: true);
         PopupShortcut.HotkeyChanged += (_, _) =>
         {
             App.Host.Settings.OpenPopupHotkey = PopupShortcut.Hotkey;
