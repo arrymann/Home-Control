@@ -21,7 +21,7 @@
                 <TextBlock
                     Margin="0,0,0,16"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Let devices switch on their own: at a time of day, at sunrise, sunset or twilight, when the PC is locked, wakes up or sits idle, or when Windows shuts down. Each automation is a small graph of nodes: a trigger (when), optional conditions (if) and actions (then)."
+                    Text="Let devices switch on their own: at a time of day, at sunrise, sunset or twilight, when the PC is locked, wakes up or sits idle, when Windows shuts down, or when you clap. Each automation is a small graph of nodes: a trigger (when), optional conditions (if) and actions (then)."
                     TextWrapping="Wrap" />
 
                 <toolkit:SettingsExpander x:Name="LocationExpander" Header="Location">

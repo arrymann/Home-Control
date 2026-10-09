@@ -67,6 +67,30 @@ public sealed class AutomationEngine
         return Task.WhenAll(runs);
     }
 
+    /// <summary>Fires the clap triggers for <paramref name="claps"/> claps in a row.</summary>
+    public Task HandleClaps(int claps)
+    {
+        var runs = Triggers<ClapTriggerNode>()
+            .Where(t => t.Node.Count == claps)
+            .ToList()
+            .Select(t => StartRun(t.Automation, t.Node, RunOptions.Normal))
+            .ToList();
+        return Task.WhenAll(runs);
+    }
+
+    /// <summary>
+    /// The numbers of claps that enabled automations react to (clap triggers wired to
+    /// something). Empty means nothing needs the microphone.
+    /// </summary>
+    public IReadOnlyList<int> ClapCounts() =>
+        _document().Automations
+            .Where(a => a.Enabled)
+            .SelectMany(a => a.Nodes.OfType<ClapTriggerNode>().Where(t => AutomationGraph.Targets(a, t.Id, Ports.Then).Count > 0))
+            .Select(t => t.Count)
+            .Distinct()
+            .Order()
+            .ToList();
+
     /// <summary>Checks time-of-day and idle triggers. Call every few seconds.</summary>
     public void Tick()
     {

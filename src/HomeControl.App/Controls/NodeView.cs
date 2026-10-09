@@ -17,6 +17,9 @@ public interface INodeEditorContext
 
     /// <summary>"Next: today 21:14", or a hint when it can't be worked out.</summary>
     string NextRunText(TimeTriggerNode trigger);
+
+    /// <summary>Whether claps are being listened for, e.g. "Listening with Microphone Array".</summary>
+    string ClapStatusText();
 }
 
 /// <summary>
@@ -225,6 +228,7 @@ public sealed class NodeView : UserControl
         TimeTriggerNode => "",
         PcEventTriggerNode => "",
         ShutdownTriggerNode => "",
+        ClapTriggerNode => "\uE720",
         TimeWindowConditionNode => "",
         DaysConditionNode => "",
         DeviceStateConditionNode => "",
@@ -297,6 +301,13 @@ public sealed class NodeView : UserControl
                     _ => "shuts down or restarts",
                 }, v => s.Kind = v));
                 body.Children.Add(Caption("Windows waits a few seconds for these actions; waits are skipped."));
+                break;
+
+            case ClapTriggerNode c:
+                body.Children.Add(Choice("Claps in a row", c.Count, v => $"{v} claps", v => c.Count = v,
+                    Enumerable.Range(ClapTriggerNode.MinCount, ClapTriggerNode.MaxCount - ClapTriggerNode.MinCount + 1).ToArray()));
+                body.Children.Add(InfoText(_context.ClapStatusText));
+                body.Children.Add(Caption("Uses the microphone while clap listening is on (Settings › General). Sound is analysed as it arrives and never kept."));
                 break;
 
             case TimeWindowConditionNode w:

@@ -21,6 +21,7 @@ internal static class NodeCatalog
         new(NodeCategory.Trigger, "Time of day", "A set time, sunrise, sunset or twilight", () => new TimeTriggerNode()),
         new(NodeCategory.Trigger, "PC event", "Locked, unlocked, sleep, wake, idle, display…", () => new PcEventTriggerNode()),
         new(NodeCategory.Trigger, "PC shutdown", "Windows shuts down, restarts or signs out", () => new ShutdownTriggerNode()),
+        new(NodeCategory.Trigger, "Claps", "Clap 2, 3 or 4 times in a row (uses the microphone)", () => new ClapTriggerNode()),
         new(NodeCategory.Condition, "Time window", "Between two times, e.g. sunset and sunrise", () => new TimeWindowConditionNode()),
         new(NodeCategory.Condition, "Day of the week", "Only on some days", () => new DaysConditionNode()),
         new(NodeCategory.Condition, "Device state", "Whether a device is on or off", () => new DeviceStateConditionNode()),

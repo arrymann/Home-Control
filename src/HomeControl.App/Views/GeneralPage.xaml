@@ -67,6 +67,55 @@
                 <ToggleSwitch x:Name="StartupSwitch" Toggled="OnStartupToggled" />
             </toolkit:SettingsCard>
 
+            <TextBlock x:Name="ClapHeader" Style="{StaticResource SettingsSectionHeaderStyle}" Text="Clap listening" />
+            <toolkit:SettingsExpander x:Name="ClapExpander" Header="Listen for claps">
+                <toolkit:SettingsExpander.HeaderIcon>
+                    <FontIcon Glyph="&#xE720;" />
+                </toolkit:SettingsExpander.HeaderIcon>
+                <ToggleSwitch x:Name="ClapSwitch" Toggled="OnClapToggled" />
+                <toolkit:SettingsExpander.Items>
+                    <toolkit:SettingsCard Description="Higher also hears quieter claps from further away, but takes more other sounds for claps." Header="Sensitivity">
+                        <ComboBox x:Name="ClapSensitivityBox" MinWidth="200" SelectionChanged="OnClapSensitivityChanged">
+                            <ComboBoxItem Content="Low" Tag="Low" />
+                            <ComboBoxItem Content="Medium" Tag="Medium" />
+                            <ComboBoxItem Content="High" Tag="High" />
+                        </ComboBox>
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Description="The Windows default recording device, unless you pick one." Header="Microphone">
+                        <ComboBox x:Name="MicrophoneBox" MinWidth="200" MaxWidth="320" SelectionChanged="OnMicrophoneChanged" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard Description="Closes the microphone while the PC is locked." Header="Pause while the PC is locked">
+                        <ToggleSwitch x:Name="ClapLockSwitch" Toggled="OnClapLockToggled" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard
+                        Click="OnMicrophonePrivacyClick"
+                        Description="Windows decides whether desktop apps may use the microphone, and shows an icon while one does."
+                        Header="Windows microphone privacy settings"
+                        IsClickEnabled="True">
+                        <toolkit:SettingsCard.ActionIcon>
+                            <FontIcon Glyph="&#xE8A7;" />
+                        </toolkit:SettingsCard.ActionIcon>
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard ContentAlignment="Left">
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="No sound is kept. It is analysed as it arrives, 10 ms at a time, and reduced to two loudness figures; the sound itself is never recorded, saved, logged or sent anywhere. The microphone is open only while this is on and an enabled automation has a Claps trigger (Automations page)."
+                            TextWrapping="Wrap" />
+                    </toolkit:SettingsCard>
+                </toolkit:SettingsExpander.Items>
+            </toolkit:SettingsExpander>
+            <InfoBar
+                x:Name="ClapBlockedBar"
+                Title="Microphone blocked"
+                IsClosable="False"
+                Message="Windows doesn't let desktop apps use the microphone. Turn on “Let desktop apps access your microphone”, then try again."
+                Severity="Warning">
+                <InfoBar.ActionButton>
+                    <Button Click="OnMicrophonePrivacyClick" Content="Open privacy settings" />
+                </InfoBar.ActionButton>
+                <HyperlinkButton Margin="0,0,0,8" Click="OnClapRetryClick" Content="Try again" />
+            </InfoBar>
+
             <TextBlock Style="{StaticResource SettingsSectionHeaderStyle}" Text="About" />
             <toolkit:SettingsExpander x:Name="AboutExpander" Header="Home Control">
                 <toolkit:SettingsExpander.HeaderIcon>

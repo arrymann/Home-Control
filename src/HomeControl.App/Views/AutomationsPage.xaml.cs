@@ -105,6 +105,20 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         return Service.Engine.NextOccurrence(trigger) is { } next ? $"Next: {Friendly(next)}" : "Doesn't happen in the coming year here.";
     }
 
+    /// <summary>Keeps the Claps nodes' "Listening…" line current.</summary>
+    private void OnClapsChanged(object? sender, EventArgs e) => GraphCanvas.RefreshInfo();
+
+    string INodeEditorContext.ClapStatusText()
+    {
+        var claps = App.Host.Claps;
+        return claps.State switch
+        {
+            ClapListenerState.Off => "Clap listening is off: turn it on in Settings › General.",
+            ClapListenerState.NotNeeded => "Turn the automation on and connect an action to start listening.",
+            _ => claps.StatusText,
+        };
+    }
+
     /// <summary>Opens the editor for an automation once the page is shown (used by the smoke test).</summary>
     internal static void Edit(string automationId)
     {
@@ -124,6 +138,7 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         _current = this;
         Service.Changed += OnServiceChanged;
         App.Host.SettingsApplied += OnServiceChanged;
+        App.Host.Claps.Changed += OnClapsChanged;
         LoadLocation();
         RefreshList();
         if (_pendingEdit is { } id)
@@ -143,6 +158,7 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
 
         Service.Changed -= OnServiceChanged;
         App.Host.SettingsApplied -= OnServiceChanged;
+        App.Host.Claps.Changed -= OnClapsChanged;
         _infoTimer.Stop();
         _searchCts?.Cancel();
         Service.SaveNow();

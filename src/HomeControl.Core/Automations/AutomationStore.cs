@@ -133,6 +133,9 @@ public sealed class AutomationStore
             case PcEventTriggerNode p:
                 p.IdleMinutes = Math.Clamp(p.IdleMinutes, 1, 24 * 60);
                 break;
+            case ClapTriggerNode c:
+                c.Count = Math.Clamp(c.Count, ClapTriggerNode.MinCount, ClapTriggerNode.MaxCount);
+                break;
             case PcStateConditionNode p:
                 p.IdleMinutes = Math.Clamp(p.IdleMinutes, 1, 24 * 60);
                 break;

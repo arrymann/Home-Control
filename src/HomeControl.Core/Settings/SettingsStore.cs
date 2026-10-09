@@ -1,6 +1,7 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using HomeControl.Core.Audio;
 
 namespace HomeControl.Core.Settings;
 
@@ -84,6 +85,9 @@ public sealed class SettingsStore
         if (string.IsNullOrWhiteSpace(settings.GoogleHome.ApiKey)) settings.GoogleHome.ApiKey = GoogleHomeSettings.DefaultApiKey;
         if (settings.GoogleHome.AuthUser < 0) settings.GoogleHome.AuthUser = 0;
         settings.GoogleHome.RefreshSeconds = Math.Clamp(settings.GoogleHome.RefreshSeconds, 3, 300);
+        settings.Claps ??= new ClapSettings();
+        if (!Enum.IsDefined(settings.Claps.Sensitivity)) settings.Claps.Sensitivity = ClapSensitivity.Medium;
+        if (string.IsNullOrWhiteSpace(settings.Claps.MicrophoneId)) settings.Claps.MicrophoneId = null;
         settings.Devices ??= [];
         settings.Devices.RemoveAll(d => d is null);
         settings.CollapsedDeviceGroups = (settings.CollapsedDeviceGroups ?? []).Where(g => !string.IsNullOrEmpty(g)).Distinct().ToList();

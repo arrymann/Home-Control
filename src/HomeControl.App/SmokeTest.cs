@@ -147,6 +147,7 @@ internal static class SmokeTest
             new DelayActionNode { X = 1060, Y = 40 },
             new AllOffActionNode { X = 1060, Y = 300 },
             new PcPowerActionNode { X = 1060, Y = 480, Command = PcPowerCommand.ShutDown },
+            new ClapTriggerNode { X = 40, Y = 840, Count = 3 },
         ];
         everything.Nodes.AddRange(everyNode);
         void Wire(int from, int to, string port = Ports.Then) => AutomationGraph.Connect(everything, everyNode[from].Id, port, everyNode[to].Id);
@@ -158,6 +159,7 @@ internal static class SmokeTest
         Wire(4, 10, Ports.Yes);
         Wire(2, 10);
         Wire(5, 11, Ports.Yes);
+        Wire(12, 8);
         var automations = host.Automations.Document;
         automations.Location = new GeoLocation(51.5074, -0.1278, "London, England, United Kingdom");
         automations.Automations.Add(AutomationTemplates.Create(AutomationTemplate.LightsAtSunset, samples));
@@ -178,7 +180,18 @@ internal static class SmokeTest
         await Step("automation editor dark", () => host.OpenAutomation(everything.Id), () => host.SettingsWindowHandle, waitMs: 2500);
         await Step("automation editor light", () => SetTheme(ThemePreference.Light), () => host.SettingsWindowHandle, waitMs: 1500);
         await Step("automation template editor", () => host.OpenAutomation(automations.Automations[0].Id), () => host.SettingsWindowHandle, waitMs: 2000);
-        await Step("back to general", () => host.OpenSettings("general"), waitMs: 500);
+        await Step("back to general", () =>
+        {
+            // Clap listening on: simulated in the smoke test, so no microphone is opened.
+            host.Settings.Claps.Enabled = true;
+            host.Claps.Update();
+            host.OpenSettings("general");
+        }, waitMs: 1000);
+        await Step("settings general claps", GeneralPage.ShowClapListening, () => host.SettingsWindowHandle, waitMs: 1500);
+        if (host.Claps.State != ClapListenerState.Listening)
+        {
+            errors.Add($"Clap listening: expected to listen (simulated), but it is {host.Claps.State}: {host.Claps.StatusText}");
+        }
 
         DeviceEditorDialog? dialog = null;
         foreach (var (name, device) in new[] { ("device dialog", samples[0]), ("device dialog assistant", samples[^1]) })

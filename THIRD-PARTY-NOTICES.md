@@ -12,3 +12,8 @@ The tray icons, app icon and device icons (`src/HomeControl.App/Assets/*`,
 `src/HomeControl.App/Controls/DeviceIconData.g.cs`) are generated from
 [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons)
 (`@fluentui/svg-icons`), MIT License, Copyright (c) 2020 Microsoft Corporation.
+
+## NAudio
+
+Microphone capture for clap listening uses [NAudio](https://github.com/naudio/NAudio)
+(`NAudio.Wasapi` and `NAudio.Core`), MIT License, Copyright 2008-2026 Mark Heath.

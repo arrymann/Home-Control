@@ -1,3 +1,4 @@
+using HomeControl.Core.Audio;
 using HomeControl.Core.Hotkeys;
 using HomeControl.Core.Models;
 
@@ -46,6 +47,9 @@ public sealed class AppSettings
     /// <summary>Retry through Google Assistant when the Google Home session fails.</summary>
     public bool UseAssistantFallback { get; set; } = true;
 
+    /// <summary>Listening for claps (the microphone), for automations with a Claps trigger.</summary>
+    public ClapSettings Claps { get; set; } = new();
+
     public List<DeviceConfig> Devices { get; set; } = [];
 
     /// <summary>Devices grouped under one toggle (Settings › Scenes), in the flyout's order.</summary>
@@ -73,6 +77,24 @@ public sealed class GoogleHomeSettings
     public int RefreshSeconds { get; set; } = 10;
 
     public DateTimeOffset? LastSync { get; set; }
+}
+
+/// <summary>
+/// Listening for claps. The microphone is used only while <see cref="Enabled"/> is on and an
+/// enabled automation has a Claps trigger; sound is analysed as it arrives and never kept.
+/// </summary>
+public sealed class ClapSettings
+{
+    /// <summary>The user turned clap listening on (off until they do).</summary>
+    public bool Enabled { get; set; }
+
+    public ClapSensitivity Sensitivity { get; set; } = ClapSensitivity.Medium;
+
+    /// <summary>Windows id of the microphone to use; null: the default recording device.</summary>
+    public string? MicrophoneId { get; set; }
+
+    /// <summary>Close the microphone while the PC is locked.</summary>
+    public bool PauseWhileLocked { get; set; }
 }
 
 /// <summary>Options for talking to the Google Assistant SDK.</summary>

@@ -338,6 +338,11 @@ public class AutomationGraphTests
         var summary = AutomationGraph.Summarize(automation, id => id == "lamp" ? "Lamp" : null);
 
         Assert.Equal("15 min before sunset → Turn on Lamp", summary);
+
+        var claps = new Automation();
+        claps.Wire(claps.Add(new ClapTriggerNode { Count = 3 }), claps.Add(new DeviceActionNode { DeviceId = "lamp", Command = DeviceCommand.Toggle }));
+        Assert.Equal("When you clap 3 times → Toggle Lamp", AutomationGraph.Summarize(claps, id => id == "lamp" ? "Lamp" : null));
+        Assert.Equal("Claps", NodeText.Title(claps.Nodes[0]));
     }
 
     [Fact]
@@ -641,6 +646,42 @@ public class AutomationEngineTests
     }
 
     [Fact]
+    public void Clap_triggers_fire_for_their_count()
+    {
+        var automation = new Automation();
+        var two = automation.Add(new ClapTriggerNode { Count = 2 });
+        var three = automation.Add(new ClapTriggerNode { Count = 3 });
+        automation.Wire(two, automation.Add(new DeviceActionNode { DeviceId = "lamp", Command = DeviceCommand.Toggle }));
+        automation.Wire(three, automation.Add(new DeviceActionNode { DeviceId = "desk", Command = DeviceCommand.Toggle }));
+        var (engine, host, _) = Create(automation);
+
+        engine.HandleClaps(3);
+        engine.HandleClaps(4);
+        engine.HandleClaps(2);
+
+        Assert.Equal(["Toggle desk", "Toggle lamp"], host.Commands);
+    }
+
+    [Fact]
+    public void Clap_counts_come_from_enabled_wired_clap_triggers()
+    {
+        var used = new Automation();
+        used.Wire(used.Add(new ClapTriggerNode { Count = 3 }), used.Add(new AllOffActionNode()));
+        used.Wire(used.Add(new ClapTriggerNode { Count = 2 }), used.Add(new AllOffActionNode()));
+        var unwired = new Automation();
+        unwired.Add(new ClapTriggerNode { Count = 4 });
+        var disabled = new Automation { Enabled = false };
+        disabled.Wire(disabled.Add(new ClapTriggerNode { Count = 4 }), disabled.Add(new AllOffActionNode()));
+        var (engine, _, document) = Create(used, unwired, disabled);
+
+        Assert.Equal([2, 3], engine.ClapCounts());
+
+        used.Enabled = false;
+        Assert.Empty(engine.ClapCounts()); // nothing needs the microphone
+        Assert.Single(document.Automations, a => a.Nodes.OfType<ClapTriggerNode>().Any(n => n.Count == 4) && a.Enabled);
+    }
+
+    [Fact]
     public void Idle_and_back_fire_on_crossing_the_threshold()
     {
         var automation = new Automation();
@@ -862,6 +903,7 @@ public class AutomationStoreTests : IDisposable
             new DelayActionNode { Seconds = 90 },
             new NotifyActionNode { Message = "Hi" },
             new PcPowerActionNode { Command = PcPowerCommand.Sleep },
+            new ClapTriggerNode { Count = 3 },
         ];
         automation.Nodes.AddRange(nodes);
         automation.Wire(nodes[0], nodes[3]);
@@ -880,7 +922,9 @@ public class AutomationStoreTests : IDisposable
         Assert.Equal(10, dusk.At.OffsetMinutes);
         Assert.Equal(Weekdays.Weekend, dusk.Days);
         Assert.Equal(new TimeOnly(22, 15), Assert.IsType<TimeWindowConditionNode>(copy.Nodes[3]).From.Time);
+        Assert.Equal(3, Assert.IsType<ClapTriggerNode>(copy.Nodes[12]).Count);
         Assert.Contains("\"type\": \"trigger.time\"", File.ReadAllText(store.FilePath));
+        Assert.Contains("\"type\": \"trigger.claps\"", File.ReadAllText(store.FilePath));
     }
 
     [Fact]
@@ -896,7 +940,9 @@ public class AutomationStoreTests : IDisposable
                 "nodes": [
                   { "type": "trigger.pc", "id": "t", "event": "Idle", "idleMinutes": 0 },
                   { "type": "action.delay", "id": "d", "seconds": -5 },
-                  { "type": "action.alloff", "id": "d" }
+                  { "type": "action.alloff", "id": "d" },
+                  { "type": "trigger.claps", "id": "c", "count": 9 },
+                  { "type": "trigger.claps", "id": "c1", "count": 1 }
                 ],
                 "links": [
                   { "fromNode": "t", "fromPort": "then", "toNode": "d" },
@@ -914,7 +960,9 @@ public class AutomationStoreTests : IDisposable
         Assert.Null(document.Location); // latitude out of range
         var automation = Assert.Single(document.Automations);
         Assert.Equal("Automation", automation.Name);
-        Assert.Equal(3, automation.Nodes.Select(n => n.Id).Distinct().Count());
+        Assert.Equal(5, automation.Nodes.Select(n => n.Id).Distinct().Count());
+        Assert.Equal(4, Assert.IsType<ClapTriggerNode>(automation.Nodes[3]).Count);
+        Assert.Equal(2, Assert.IsType<ClapTriggerNode>(automation.Nodes[4]).Count);
         Assert.Equal(1, Assert.IsType<PcEventTriggerNode>(automation.Nodes[0]).IdleMinutes);
         Assert.Equal(0, Assert.IsType<DelayActionNode>(automation.Nodes[1]).Seconds);
         Assert.Equal([new AutomationLink("t", "then", "d")], automation.Links);

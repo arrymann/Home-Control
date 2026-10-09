@@ -37,6 +37,7 @@ internal sealed class AppHost
     private GoogleHomeClient _googleHome = null!;
     private DispatcherQueueTimer _pollTimer = null!;
     private AutomationService _automations = null!;
+    private ClapListener _claps = null!;
     private Task<GoogleHomeSyncResult>? _syncTask;
     private int _googleHomeSignOuts;
     private bool _syncFailed;
@@ -70,6 +71,8 @@ internal sealed class AppHost
     internal GoogleHomeSession GoogleHomeSession => _googleHomeSession;
 
     internal AutomationService Automations => _automations;
+
+    internal ClapListener Claps => _claps;
 
     public HomeViewModel Home { get; private set; } = null!;
 
@@ -170,6 +173,8 @@ internal sealed class AppHost
         };
 
         _automations = new AutomationService(this, _messageWindow, _http, _dispatcher, readOnly: IsSmokeTest);
+        _claps = new ClapListener(_dispatcher, () => Settings.Claps, _automations, simulated: IsSmokeTest);
+        _claps.Changed += (_, _) => UpdateToolTip();
         PcPower.ShutdownFailed += (_, message) => _trayIcon.ShowNotification("Home Control", message);
 
         ApplyAppearance();
@@ -183,6 +188,7 @@ internal sealed class AppHost
 
         // Last, so "when Home Control starts" automations find everything ready.
         _automations.Start();
+        _claps.Update();
 
         if (!background)
         {
@@ -201,6 +207,7 @@ internal sealed class AppHost
         Home.LoadScenes(Settings.Scenes);
         ApplyHotkeys();
         ApplyAppearance();
+        _claps?.Update();
         SettingsApplied?.Invoke(this, EventArgs.Empty);
     }
 
@@ -375,6 +382,7 @@ internal sealed class AppHost
 
         _exited = true;
         _pollTimer.Stop();
+        _claps.Dispose(); // closes the microphone
         _automations.Dispose();
         _signInWindow?.Close();
         _settingsWindow?.Close();
@@ -608,6 +616,13 @@ internal sealed class AppHost
                 enabled: _syncTask is null)
             .AddSeparator()
             .AddIf(PcPower.ShutdownScheduled, "Cancel shutdown", CancelScheduledShutdown)
+            .AddIf(_automations.Engine.ClapCounts().Count > 0,
+                Settings.Claps.Enabled ? "Stop listening for claps" : "Listen for claps",
+                () =>
+                {
+                    Settings.Claps.Enabled = !Settings.Claps.Enabled;
+                    SaveSettings();
+                })
             .Add("Settings", () => OpenSettings())
             .AddSeparator()
             .Add("Exit", Exit)
@@ -752,7 +767,8 @@ internal sealed class AppHost
         _trayIconDpi = dpi;
     }
 
-    private void UpdateToolTip() => _trayIcon?.SetToolTip($"Home Control – {Home.Summary}");
+    private void UpdateToolTip() =>
+        _trayIcon?.SetToolTip($"Home Control – {Home.Summary}{(_claps?.IsListening == true ? " · listening for claps" : "")}");
 
     private void OnMessage(uint message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {

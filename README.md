@@ -8,7 +8,8 @@ A small WinUI 3 tray app for switching your Google Home devices on and off.
 - **Follows the Windows theme.** The tray icon matches the taskbar (white on a dark taskbar, black on a light one). The flyout and settings window follow the app light/dark mode and switch live when you change it.
 - **Mica.** Both windows use Mica by default. Mica Alt, Acrylic or a plain background can be picked in Settings › General.
 - **Scenes.** Group devices under one toggle in the tray (Settings › Scenes), with an optional shortcut.
-- **Automations.** A node-based editor (Settings › Automations) switches devices on their own: at a time of day or at sunrise, sunset and twilight for your location, when the PC is locked, wakes up or sits idle, or when Windows shuts down.
+- **Automations.** A node-based editor (Settings › Automations) switches devices on their own: at a time of day or at sunrise, sunset and twilight for your location, when the PC is locked, wakes up or sits idle, when Windows shuts down, or when you clap.
+- **Clap to switch.** Optionally, clap two, three or four times in a row to run an automation, for example to toggle a lamp. Nothing you say or play is kept (see [Clap listening](#clap-listening)).
 - Optional notification after a shortcut toggles a device, and an option to start with Windows.
 
 ## How it talks to Google Home
@@ -71,6 +72,7 @@ Each automation is a small graph. **Triggers** (when) start it, **conditions** (
 | **Time of day** | Trigger | A set time, or sunrise, sunset, dawn/dusk (civil twilight), nautical or astronomical twilight, or solar noon, with an offset (for example 15 min before sunset), on chosen days |
 | **PC event** | Trigger | The PC is locked or unlocked, goes to sleep or wakes up, has been idle for N minutes or you're back, the display turns off or on, or it switches to battery or is plugged in; also when Home Control starts |
 | **PC shutdown** | Trigger | Windows shuts down or restarts, or you sign out |
+| **Claps** | Trigger | You clap 2, 3 or 4 times in a row, while clap listening is on (see below) |
 | **Time window** | Condition | Between two times of day, which can be sun times and can wrap past midnight (for example sunset to sunrise) |
 | **Day of the week** | Condition | Only on some days |
 | **Device state** | Condition | A device is on or off |
@@ -88,6 +90,15 @@ Each automation is a small graph. **Triggers** (when) start it, **conditions** (
 **Polar day and night.** Where the sun doesn't set or rise on a day, a window such as *sunset to sunrise* follows where the sun actually is.
 
 **Missed times.** Time triggers fire while Home Control runs. One that was missed by more than two minutes, because the PC was asleep or the app wasn't running, is skipped rather than run late. Starting an automation again while it is still running (for example inside a *Wait*) restarts it; turning it off or deleting it stops it. Automations are saved in `%LOCALAPPDATA%\HomeControl\automations.json`, and failures show a notification.
+
+## Clap listening
+
+Clap two, three or four times in a row to run an automation that starts with a **Claps** trigger, for example *Claps (2) → Device: toggle Lamp*. Turn it on under **Settings › General › Listen for claps**. It is off until you do.
+
+- **When the microphone is open.** Only while clap listening is on *and* an enabled automation has a Claps trigger wired to something. It closes while the PC sleeps and during Remote Desktop sessions, and optionally while the PC is locked. The settings page and the Claps node say whether it is listening and when it last heard you. Windows shows its microphone icon while it is open. The tray menu has **Stop listening for claps**.
+- **Nothing is kept.** Sound is analysed as it arrives and then forgotten. Each sample goes through three filters into two running sums, and every 10 ms these become two loudness figures (2–7 kHz and below 2 kHz). The detector reads Windows' capture buffer in place, without copying it. It remembers only a few numbers: background levels, the last two loudness figures, filter state and the timing of the current claps. No sound is ever recorded, written to disk, logged or sent anywhere, and the microphone isn't connected to anything else in the app. The log only notes when listening starts or stops and how many claps were heard. The unit tests check that the detector has nowhere to keep sound (no arrays, lists or buffers) and allocates nothing while it listens.
+- **What counts as a clap.** A sharp, bright sound that dies away like a clap in a room. Speech and music last too long, keyboard clicks have no room echo, and knocks and slams are too low-pitched. Claps in a row must be 0.12–0.6 s apart with a steady rhythm. A sequence starts only after a short quiet moment, and any other sound in between cancels it. It is reported once it is clearly over, about half a second after the last clap, so three claps never also count as two. **Sensitivity** (Low, Medium or High) trades quiet or distant claps against false alarms. Finger snaps and claps on TV sound like claps, so they can trigger it too.
+- **Microphone.** The Windows default recording device, or one you pick. Windows' voice processing (noise suppression, automatic gain) is bypassed where the device allows it, because it flattens claps. If Windows blocks microphone access for desktop apps (*Settings › Privacy & security › Microphone › Let desktop apps access your microphone*), the settings page says so and links there.
 
 ## Building
 
@@ -130,13 +141,13 @@ dotnet test tests/HomeControl.Core.Tests
 | | |
 |---|---|
 | Left-click tray icon | Open or close the device flyout (Esc or clicking elsewhere closes it) |
-| Right-click tray icon | Refresh device states, Turn all off, Sync devices, Settings, Exit |
+| Right-click tray icon | Refresh device states, Turn all off, Sync devices, stop or start listening for claps (when an automation uses claps), Settings, Exit |
 | Device shortcut | Toggles that device; a notification confirms it (can be turned off) |
 | Settings › Devices | Devices grouped by home and room. Groups collapse, and Home Control remembers which. Sync from Google Home, show or hide devices in the tray, rename, record shortcuts, **Try it** buttons; add Assistant devices by name. **Move up/down** sets the order within a room, which is also the order in the flyout. |
 | Settings › Scenes | Groups of devices with one toggle: devices, icon, shortcut, shown in the tray or not |
 | Settings › Automations | Location, automation list and the node editor |
 | Settings › Account | Google Home sign-in and sync; Google Assistant setup, fallback, language and command phrases |
-| Settings › General | Theme, window material, flyout shortcut, notifications, start with Windows |
+| Settings › General | Theme, window material, flyout shortcut, notifications, start with Windows, clap listening |
 
 Starting `HomeControl.exe` a second time opens the flyout of the running instance. With `--background` (used by *Start with Windows*) it starts silently in the tray. `HomeControl.exe --exit` closes the running instance (the builder uses this before it replaces the app's files).
 
@@ -144,21 +155,23 @@ Starting `HomeControl.exe` a second time opens the flyout of the running instanc
 
 Assistant commands are built from templates (`turn on {name}`, `turn off {name}`, `is {name} on?`). Answers are interpreted with regular expressions. All of these can be changed under **Settings › Account › Language and commands**, so Home Control works with any Assistant language. Each device can also override its phrases, for example `activate movie night` for a scene.
 
-Settings live in `%LOCALAPPDATA%\HomeControl\settings.json`, next to a log file (`home-control.log`).
+Settings live in `%LOCALAPPDATA%\HomeControl\settings.json`, next to a log file (`home-control.log`). No audio is ever stored there or anywhere else.
 
 ## Project layout
 
 ```
 src/HomeControl.Core         Cross-platform logic: automations (node graph, sun times, scheduling,
-                             runner), Google Home protocol, device sync and routing,
+                             runner), clap detector, Google Home protocol, device sync and routing,
                              OAuth (loopback + PKCE), Assistant gRPC client, settings and secret
                              store, shortcut model
 src/HomeControl.App          WinUI 3 app: Win32 tray icon and hotkeys, flyout, settings window,
-                             node editor, PC state/shutdown monitor, the WebView2 Google Home
-                             session and sign-in window
+                             node editor, PC state/shutdown monitor, microphone capture for
+                             claps (NAudio, WASAPI), the WebView2 Google Home session and
+                             sign-in window
 tests/HomeControl.Core.Tests xUnit tests, including sun times checked against an independent
-                             implementation, sample Google Home responses and an in-process
-                             fake Assistant gRPC server
+                             implementation, sample Google Home responses, an in-process
+                             fake Assistant gRPC server and synthesized claps, speech, music,
+                             knocks and typing for the clap detector (made in memory, no recordings)
 tools/builder                The window behind "Build Home Control.cmd" (Windows PowerShell + WPF)
 tools/generate_assets.py     Regenerates the icons from Fluent UI System Icons
 ```

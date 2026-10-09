@@ -79,6 +79,7 @@ public static class Ports
 [JsonDerivedType(typeof(TimeTriggerNode), "trigger.time")]
 [JsonDerivedType(typeof(PcEventTriggerNode), "trigger.pc")]
 [JsonDerivedType(typeof(ShutdownTriggerNode), "trigger.shutdown")]
+[JsonDerivedType(typeof(ClapTriggerNode), "trigger.claps")]
 [JsonDerivedType(typeof(TimeWindowConditionNode), "condition.time")]
 [JsonDerivedType(typeof(DaysConditionNode), "condition.days")]
 [JsonDerivedType(typeof(DeviceStateConditionNode), "condition.device")]
@@ -248,6 +249,21 @@ public sealed class ShutdownTriggerNode : AutomationNode
     public override NodeCategory Category => NodeCategory.Trigger;
 
     public ShutdownKind Kind { get; set; } = ShutdownKind.ShutdownOrRestart;
+}
+
+/// <summary>
+/// Fires when you clap a number of times in a row. Home Control listens to the microphone only
+/// while clap listening is on (Settings › General) and an enabled automation has this trigger.
+/// </summary>
+public sealed class ClapTriggerNode : AutomationNode
+{
+    public const int MinCount = 2;
+    public const int MaxCount = 4;
+
+    public override NodeCategory Category => NodeCategory.Trigger;
+
+    /// <summary>Claps in a row: 2 to 4.</summary>
+    public int Count { get; set; } = 2;
 }
 
 // ---------------------------------------------------------------- conditions

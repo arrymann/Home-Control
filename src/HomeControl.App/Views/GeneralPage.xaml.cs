@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using HomeControl.Core.Audio;
 using HomeControl.Core.Settings;
 using HomeControl.Services;
 using Microsoft.UI.Xaml;
@@ -10,7 +11,9 @@ namespace HomeControl.Views;
 
 public sealed partial class GeneralPage : Page
 {
+    private static GeneralPage? _current;
     private bool _loading;
+    private int _microphoneLoads;
 
     public GeneralPage()
     {
@@ -36,10 +39,122 @@ public sealed partial class GeneralPage : Page
         RefreshSwitch.IsOn = Settings.RefreshStatesOnOpen;
         StartupSwitch.IsOn = StartupService.IsEnabled;
 
+        ClapSwitch.IsOn = Settings.Claps.Enabled;
+        Select(ClapSensitivityBox, Settings.Claps.Sensitivity.ToString());
+        ClapLockSwitch.IsOn = Settings.Claps.PauseWhileLocked;
+        ShowMicrophones([]);
+
         var version = Assembly.GetExecutingAssembly().GetName().Version;
         AboutExpander.Description = $"Version {version?.ToString(3) ?? "1.0.0"}";
         _loading = false;
+
+        _current = this;
+        App.Host.Claps.Changed += OnClapsChanged;
+        UpdateClapStatus();
+        _ = LoadMicrophonesAsync();
     }
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        base.OnNavigatedFrom(e);
+        App.Host.Claps.Changed -= OnClapsChanged;
+        if (_current == this)
+        {
+            _current = null;
+        }
+    }
+
+    /// <summary>Scrolls to the clap listening section (used by the smoke test).</summary>
+    internal static void ShowClapListening()
+    {
+        if (_current is { } page)
+        {
+            page.ClapExpander.IsExpanded = true;
+            page.ClapHeader.StartBringIntoView(new BringIntoViewOptions { VerticalAlignmentRatio = 0, AnimationDesired = false });
+        }
+    }
+
+    private void OnClapsChanged(object? sender, EventArgs e) => UpdateClapStatus();
+
+    private void UpdateClapStatus()
+    {
+        var claps = App.Host.Claps;
+        ClapExpander.Description = claps.StatusText;
+        ClapBlockedBar.IsOpen = claps.State == ClapListenerState.Blocked;
+    }
+
+    private async Task LoadMicrophonesAsync()
+    {
+        var load = ++_microphoneLoads;
+        var microphones = await Task.Run(() => MicrophoneCapture.ListMicrophones());
+        if (load == _microphoneLoads && _current == this)
+        {
+            ShowMicrophones(microphones);
+        }
+    }
+
+    /// <summary>Fills the microphone list: the Windows default first, then the plugged-in ones.</summary>
+    private void ShowMicrophones(IReadOnlyList<(string Id, string Name)> microphones)
+    {
+        var loading = _loading;
+        _loading = true;
+        MicrophoneBox.Items.Clear();
+        MicrophoneBox.Items.Add(new ComboBoxItem { Content = "Windows default", Tag = string.Empty });
+        foreach (var (id, name) in microphones)
+        {
+            MicrophoneBox.Items.Add(new ComboBoxItem { Content = name, Tag = id });
+        }
+
+        var chosen = Settings.Claps.MicrophoneId;
+        if (chosen is not null && microphones.All(m => m.Id != chosen))
+        {
+            MicrophoneBox.Items.Add(new ComboBoxItem { Content = "Chosen microphone (not connected)", Tag = chosen });
+        }
+
+        Select(MicrophoneBox, chosen ?? string.Empty);
+        _loading = loading;
+    }
+
+    private void OnClapToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loading)
+        {
+            Settings.Claps.Enabled = ClapSwitch.IsOn;
+            App.Host.SaveSettings();
+        }
+    }
+
+    private void OnClapSensitivityChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loading && Enum.TryParse<ClapSensitivity>(SelectedTag(ClapSensitivityBox), out var sensitivity))
+        {
+            Settings.Claps.Sensitivity = sensitivity;
+            App.Host.SaveSettings();
+        }
+    }
+
+    private void OnMicrophoneChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loading && SelectedTag(MicrophoneBox) is { } id)
+        {
+            Settings.Claps.MicrophoneId = id.Length == 0 ? null : id;
+            App.Host.SaveSettings();
+        }
+    }
+
+    private void OnClapLockToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loading)
+        {
+            Settings.Claps.PauseWhileLocked = ClapLockSwitch.IsOn;
+            App.Host.SaveSettings();
+        }
+    }
+
+    private void OnMicrophonePrivacyClick(object sender, RoutedEventArgs e) =>
+        Process.Start(new ProcessStartInfo("ms-settings:privacy-microphone") { UseShellExecute = true });
+
+    private void OnClapRetryClick(object sender, RoutedEventArgs e) => App.Host.Claps.Retry();
 
     private void OnThemeChanged(object sender, SelectionChangedEventArgs e)
     {

@@ -1,3 +1,4 @@
+using HomeControl.Core.Audio;
 using HomeControl.Core.Hotkeys;
 using HomeControl.Core.Models;
 using HomeControl.Core.Security;
@@ -17,6 +18,8 @@ public class SettingsStoreTests
         Assert.Equal(BackdropKind.Mica, settings.Backdrop);
         Assert.Empty(settings.Devices);
         Assert.Equal("en-US", settings.Assistant.LanguageCode);
+        Assert.False(settings.Claps.Enabled); // the microphone stays off until the user turns it on
+        Assert.Equal(ClapSensitivity.Medium, settings.Claps.Sensitivity);
     }
 
     [Fact]
@@ -32,6 +35,7 @@ public class SettingsStoreTests
             NotifyOnHotkey = false,
             RefreshStatesOnOpen = true,
             Assistant = { LanguageCode = "de-DE", OnCommandTemplate = "schalte {name} ein" },
+            Claps = { Enabled = true, Sensitivity = ClapSensitivity.High, MicrophoneId = "{0.0.1.00000000}.{mic}", PauseWhileLocked = true },
             Devices =
             {
                 new DeviceConfig { Name = "Kitchen light", Kind = DeviceKind.Light, Hotkey = Hotkey.Parse("Ctrl+Alt+1") },
@@ -55,10 +59,15 @@ public class SettingsStoreTests
         Assert.Equal(Hotkey.Parse("Ctrl+Alt+1"), loaded.Devices[0].Hotkey);
         Assert.Equal("Espresso", loaded.Devices[1].Label);
         Assert.Equal("start the coffee machine", loaded.Devices[1].OnCommand);
+        Assert.True(loaded.Claps.Enabled);
+        Assert.Equal(ClapSensitivity.High, loaded.Claps.Sensitivity);
+        Assert.Equal("{0.0.1.00000000}.{mic}", loaded.Claps.MicrophoneId);
+        Assert.True(loaded.Claps.PauseWhileLocked);
 
         var json = File.ReadAllText(store.FilePath);
         Assert.Contains("\"theme\": \"Dark\"", json);
         Assert.Contains("\"hotkey\": \"Ctrl+Alt+1\"", json);
+        Assert.Contains("\"sensitivity\": \"High\"", json);
         Assert.DoesNotContain("label", json);
     }
 
@@ -103,6 +112,22 @@ public class SettingsStoreTests
         Assert.Null(settings.OpenPopupHotkey);
         Assert.Equal(AssistantSettings.DefaultOnTemplate, settings.Assistant.OnCommandTemplate);
         Assert.Equal("en-US", settings.Assistant.LanguageCode);
+    }
+
+    [Theory]
+    [InlineData("""{ "claps": null }""")]
+    [InlineData("""{ "claps": { "sensitivity": 7, "microphoneId": "  " } }""")]
+    public void Clap_settings_are_repaired(string json)
+    {
+        using var dir = new TempDirectory();
+        var path = dir.File("settings.json");
+        File.WriteAllText(path, json);
+
+        var settings = new SettingsStore(path).Load();
+
+        Assert.False(settings.Claps.Enabled);
+        Assert.Equal(ClapSensitivity.Medium, settings.Claps.Sensitivity);
+        Assert.Null(settings.Claps.MicrophoneId);
     }
 
     [Fact]

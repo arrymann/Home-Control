@@ -69,6 +69,9 @@ internal sealed class AutomationService : IDisposable
     /// <summary>Raised on the UI thread when automations changed (edited, or a run finished).</summary>
     public event EventHandler? Changed;
 
+    /// <summary>Raised on the UI thread for every PC event, even before automations start (e.g. for the clap listener).</summary>
+    public event Action<PcEvent>? PcEventOccurred;
+
     /// <summary>Starts the clock and fires the "Home Control started" triggers.</summary>
     public void Start()
     {
@@ -82,8 +85,26 @@ internal sealed class AutomationService : IDisposable
         _tickTimer.Start();
     }
 
+    /// <summary>Fires the clap triggers for a pattern the clap listener heard.</summary>
+    public void HandleClaps(int claps)
+    {
+        if (_started)
+        {
+            _ = Engine.HandleClaps(claps);
+        }
+    }
+
     private Task OnPcEvent(PcEvent pcEvent)
     {
+        try
+        {
+            PcEventOccurred?.Invoke(pcEvent);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Handling PC event {pcEvent}", ex);
+        }
+
         if (!_started)
         {
             return Task.CompletedTask;
