@@ -43,6 +43,7 @@ internal sealed class AutomationService : IDisposable
         Engine.RunCompleted += OnRunCompleted;
 
         _pc.PcEventOccurred = OnPcEvent;
+        _pc.SessionMoved = () => SessionMoved?.Invoke();
         _pc.HasSessionEndingWork = signingOut => _started && Document.Automations.Any(a =>
             a.Enabled && a.Nodes.OfType<ShutdownTriggerNode>().Any(t => t.Kind == ShutdownKind.Any || (t.Kind == ShutdownKind.SignOut) == signingOut));
         _pc.SessionEnding = signingOut => Engine.RunShutdownTriggersAsync(signingOut, CancellationToken.None);
@@ -71,6 +72,9 @@ internal sealed class AutomationService : IDisposable
 
     /// <summary>Raised on the UI thread for every PC event, even before automations start (e.g. for the clap listener).</summary>
     public event Action<PcEvent>? PcEventOccurred;
+
+    /// <summary>Raised on the UI thread when the session moves between the console and Remote Desktop.</summary>
+    public event Action? SessionMoved;
 
     /// <summary>Starts the clock and fires the "Home Control started" triggers.</summary>
     public void Start()

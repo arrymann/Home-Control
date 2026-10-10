@@ -24,6 +24,10 @@ internal sealed class PcMonitor : IDisposable
     private const int PBT_APMRESUMEAUTOMATIC = 0x0012;
     private const int PBT_POWERSETTINGCHANGE = 0x8013;
 
+    private const int WTS_CONSOLE_CONNECT = 0x1;
+    private const int WTS_CONSOLE_DISCONNECT = 0x2;
+    private const int WTS_REMOTE_CONNECT = 0x3;
+    private const int WTS_REMOTE_DISCONNECT = 0x4;
     private const int WTS_SESSION_LOCK = 0x7;
     private const int WTS_SESSION_UNLOCK = 0x8;
 
@@ -70,6 +74,9 @@ internal sealed class PcMonitor : IDisposable
     /// </summary>
     public Func<bool, Task>? SessionEnding { get; set; }
 
+    /// <summary>Called on the UI thread when the session moves between the console and Remote Desktop.</summary>
+    public Action? SessionMoved { get; set; }
+
     /// <summary>Whether anything wants to run at shutdown (so shutdown isn't delayed for nothing).</summary>
     public Func<bool, bool>? HasSessionEndingWork { get; set; }
 
@@ -112,6 +119,20 @@ internal sealed class PcMonitor : IDisposable
                     case WTS_SESSION_UNLOCK:
                         Locked = false;
                         Raise(PcEvent.Unlocked);
+                        break;
+                    case WTS_CONSOLE_CONNECT:
+                    case WTS_CONSOLE_DISCONNECT:
+                    case WTS_REMOTE_CONNECT:
+                    case WTS_REMOTE_DISCONNECT:
+                        try
+                        {
+                            SessionMoved?.Invoke();
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error("Session change", ex);
+                        }
+
                         break;
                 }
 

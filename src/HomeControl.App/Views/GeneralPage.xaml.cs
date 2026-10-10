@@ -42,7 +42,7 @@ public sealed partial class GeneralPage : Page
         ClapSwitch.IsOn = Settings.Claps.Enabled;
         Select(ClapSensitivityBox, Settings.Claps.Sensitivity.ToString());
         ClapLockSwitch.IsOn = Settings.Claps.PauseWhileLocked;
-        ShowMicrophones([]);
+        ShowMicrophones([], listed: false);
 
         var version = Assembly.GetExecutingAssembly().GetName().Version;
         AboutExpander.Description = $"Version {version?.ToString(3) ?? "1.0.0"}";
@@ -50,6 +50,7 @@ public sealed partial class GeneralPage : Page
 
         _current = this;
         App.Host.Claps.Changed += OnClapsChanged;
+        App.Host.SettingsApplied += OnClapsChanged;
         UpdateClapStatus();
         _ = LoadMicrophonesAsync();
     }
@@ -58,6 +59,7 @@ public sealed partial class GeneralPage : Page
     {
         base.OnNavigatedFrom(e);
         App.Host.Claps.Changed -= OnClapsChanged;
+        App.Host.SettingsApplied -= OnClapsChanged;
         if (_current == this)
         {
             _current = null;
@@ -81,6 +83,14 @@ public sealed partial class GeneralPage : Page
         var claps = App.Host.Claps;
         ClapExpander.Description = claps.StatusText;
         ClapBlockedBar.IsOpen = claps.State == ClapListenerState.Blocked;
+
+        // Also changed from the tray menu.
+        var loading = _loading;
+        _loading = true;
+        ClapSwitch.IsOn = Settings.Claps.Enabled;
+        ClapLockSwitch.IsOn = Settings.Claps.PauseWhileLocked;
+        Select(ClapSensitivityBox, Settings.Claps.Sensitivity.ToString());
+        _loading = loading;
     }
 
     private async Task LoadMicrophonesAsync()
@@ -89,12 +99,13 @@ public sealed partial class GeneralPage : Page
         var microphones = await Task.Run(() => MicrophoneCapture.ListMicrophones());
         if (load == _microphoneLoads && _current == this)
         {
-            ShowMicrophones(microphones);
+            ShowMicrophones(microphones, listed: true);
         }
     }
 
     /// <summary>Fills the microphone list: the Windows default first, then the plugged-in ones.</summary>
-    private void ShowMicrophones(IReadOnlyList<(string Id, string Name)> microphones)
+    /// <param name="listed">False until Windows has listed the microphones.</param>
+    private void ShowMicrophones(IReadOnlyList<(string Id, string Name)> microphones, bool listed)
     {
         var loading = _loading;
         _loading = true;
@@ -108,7 +119,7 @@ public sealed partial class GeneralPage : Page
         var chosen = Settings.Claps.MicrophoneId;
         if (chosen is not null && microphones.All(m => m.Id != chosen))
         {
-            MicrophoneBox.Items.Add(new ComboBoxItem { Content = "Chosen microphone (not connected)", Tag = chosen });
+            MicrophoneBox.Items.Add(new ComboBoxItem { Content = listed ? "Chosen microphone (not connected)" : "Chosen microphone", Tag = chosen });
         }
 
         Select(MicrophoneBox, chosen ?? string.Empty);

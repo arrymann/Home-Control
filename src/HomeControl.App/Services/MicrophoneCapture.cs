@@ -20,6 +20,9 @@ internal enum MicrophoneState
 
     /// <summary>It failed (unplugged, used by another app…) and will be tried again.</summary>
     Retrying,
+
+    /// <summary>Not opened: the session is used over Remote Desktop, where the microphone would be the remote one.</summary>
+    RemoteSession,
 }
 
 /// <summary>
@@ -41,6 +44,7 @@ internal enum MicrophoneState
 internal sealed class MicrophoneCapture : IDisposable
 {
     private const int AccessDenied = unchecked((int)0x80070005);
+    private const int SmRemoteSession = 0x1000;
     private const int RequestedSampleRate = 48000;
     private static readonly int[] RetrySeconds = [1, 2, 5, 10, 30, 60];
 
@@ -58,6 +62,7 @@ internal sealed class MicrophoneCapture : IDisposable
     private int _channels;
     private long _lastPacket;
     private bool _reportedError;
+    private Exception? _stopError;
 
     // Loop-only state.
     private MMDeviceEnumerator? _enumerator;
@@ -70,6 +75,7 @@ internal sealed class MicrophoneCapture : IDisposable
     private int _failures;
     private long _startedAt;
     private CancellationTokenSource? _retry;
+    private MicrophoneState _reported = MicrophoneState.Off;
 
     /// <param name="patternDetected">Claps in a row; called on the capture thread.</param>
     /// <param name="clapHeard">A single clap; called on the capture thread.</param>
@@ -184,7 +190,10 @@ internal sealed class MicrophoneCapture : IDisposable
         }
     }
 
-    private Task RestartAsync()
+    private Task RestartAsync() => RestartAsync(quiet: false);
+
+    /// <param name="quiet">An automatic retry: keep showing the problem (not "Starting") until it works.</param>
+    private Task RestartAsync(bool quiet)
     {
         CancelRetry();
         TearDown();
@@ -193,7 +202,19 @@ internal sealed class MicrophoneCapture : IDisposable
             return Task.CompletedTask;
         }
 
-        Report(MicrophoneState.Starting, null);
+        if (GetSystemMetrics(SmRemoteSession) != 0)
+        {
+            // Over Remote Desktop the default microphone is the remote one; the listener resumes
+            // when the session is back at the console.
+            Report(MicrophoneState.RemoteSession, null);
+            return Task.CompletedTask;
+        }
+
+        if (!quiet || _reported is not (MicrophoneState.Blocked or MicrophoneState.Retrying or MicrophoneState.NoMicrophone))
+        {
+            Report(MicrophoneState.Starting, null);
+        }
+
         try
         {
             EnsureNotifications();
@@ -325,6 +346,7 @@ internal sealed class MicrophoneCapture : IDisposable
         }
 
         var recorder = builder.Build(); // may fail with E_ACCESSDENIED
+        var started = false;
         try
         {
             var waveFormat = recorder.WaveFormat;
@@ -345,27 +367,86 @@ internal sealed class MicrophoneCapture : IDisposable
             recorder.RecordingStopped += (_, e) =>
             {
                 var error = e.Exception; // on the capture thread: only queue (disposing here would deadlock)
+                Volatile.Write(ref _stopError, error);
                 Post(() => OnStopped(generation, error));
             };
-            Volatile.Write(ref _lastPacket, Environment.TickCount64);
+            Volatile.Write(ref _stopError, null);
             recorder.StartRecording(); // may fail: access denied, in use, …
+            started = true;
 
-            // NAudio 3.1.0 loses a stop that arrives while it is still starting, and Dispose then
-            // hangs: don't hand the recorder over until it is capturing.
+            // Hand the recorder over only once it is capturing (see StopAndDispose).
             var deadline = Environment.TickCount64 + 5000;
             while (recorder.CaptureState == CaptureState.Starting && Environment.TickCount64 < deadline)
             {
                 Thread.Sleep(5);
             }
 
+            if (recorder.CaptureState != CaptureState.Capturing)
+            {
+                throw Volatile.Read(ref _stopError) ?? new TimeoutException("The microphone didn't start");
+            }
+
+            Volatile.Write(ref _lastPacket, Environment.TickCount64);
             return recorder;
         }
         catch
         {
-            recorder.Dispose(); // single use
+            recorder.DataAvailable -= OnData;
+            if (started)
+            {
+                StopAndDispose(recorder);
+            }
+            else
+            {
+                recorder.Dispose(); // single use; no capture thread yet
+            }
+
             ForgetDetector();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Stops a recorder for sure and disposes it. NAudio 3.1.0 loses a stop that arrives while
+    /// the device is still starting (its capture thread then sets "capturing" anyway), and its
+    /// Dispose waits for that thread without a limit, so the stop is repeated until it takes.
+    /// A driver that doesn't respond is left to a background thread, so this loop never hangs.
+    /// </summary>
+    private static void StopAndDispose(WasapiRecorder recorder)
+    {
+        if (TryStop(recorder, TimeSpan.FromSeconds(2)))
+        {
+            recorder.Dispose(); // the capture thread has ended
+            return;
+        }
+
+        Log.Info("The microphone isn't responding; closing it in the background.");
+        new Thread(() =>
+        {
+            while (!TryStop(recorder, TimeSpan.FromSeconds(10)))
+            {
+            }
+
+            recorder.Dispose();
+        })
+        { IsBackground = true, Name = "Closing the microphone" }.Start();
+    }
+
+    private static bool TryStop(WasapiRecorder recorder, TimeSpan limit)
+    {
+        var deadline = Environment.TickCount64 + (long)limit.TotalMilliseconds;
+        while (recorder.CaptureState != CaptureState.Stopped)
+        {
+            if (Environment.TickCount64 > deadline)
+            {
+                return false;
+            }
+
+            recorder.StopRecording();
+            Thread.Sleep(10);
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -459,11 +540,17 @@ internal sealed class MicrophoneCapture : IDisposable
     private Task CheckStalled()
     {
         // A capture stream delivers packets (silent ones too) all the time; none for 3 s means it is stuck.
+        var now = Environment.TickCount64;
         if (_wanted && _recorder is { CaptureState: CaptureState.Capturing } &&
-            Environment.TickCount64 - Volatile.Read(ref _lastPacket) > 3000)
+            now - _startedAt > 3000 && now - Volatile.Read(ref _lastPacket) > 3000)
         {
-            Log.Info("The microphone stopped delivering sound; restarting it.");
-            return RestartAsync();
+            if (now - _startedAt > 60_000)
+            {
+                _failures = 0;
+            }
+
+            TearDown();
+            HandleFailure(new TimeoutException("The microphone stopped delivering sound"));
         }
 
         return Task.CompletedTask;
@@ -493,7 +580,7 @@ internal sealed class MicrophoneCapture : IDisposable
 
         var delay = TimeSpan.FromSeconds(RetrySeconds[Math.Min(_failures++, RetrySeconds.Length - 1)]);
         var reason = ex.HResult == AudioClientErrorCode.DeviceInUse ? "Another app is using the microphone exclusively"
-            : ex is NotSupportedException ? ex.Message
+            : ex is NotSupportedException or TimeoutException ? ex.Message
             : $"Microphone error 0x{ex.HResult:X8}";
         Log.Info($"Microphone: {reason} ({ex.GetType().Name}); trying again in {delay.TotalSeconds:0} s.");
         Report(MicrophoneState.Retrying, reason);
@@ -509,7 +596,7 @@ internal sealed class MicrophoneCapture : IDisposable
             {
                 if (!t.IsCanceled)
                 {
-                    Post(RestartAsync);
+                    Post(() => RestartAsync(quiet: true));
                 }
             },
             TaskScheduler.Default);
@@ -529,13 +616,8 @@ internal sealed class MicrophoneCapture : IDisposable
         _recorder = null;
         if (recorder is not null)
         {
-            recorder.DataAvailable -= OnData;
-            if (recorder.CaptureState != CaptureState.Stopped)
-            {
-                recorder.StopRecording();
-            }
-
-            recorder.Dispose(); // waits for the capture thread to end
+            recorder.DataAvailable -= OnData; // from now on nothing more is analysed
+            StopAndDispose(recorder);
             Log.Info("Stopped listening for claps.");
         }
 
@@ -556,7 +638,11 @@ internal sealed class MicrophoneCapture : IDisposable
         }
     }
 
-    private void Report(MicrophoneState state, string? detail) => StateChanged?.Invoke(state, detail);
+    private void Report(MicrophoneState state, string? detail)
+    {
+        _reported = state;
+        StateChanged?.Invoke(state, detail);
+    }
 
     private static bool IsFloat32(WaveFormat format) => format.BitsPerSample == 32 &&
         (format.Encoding == WaveFormatEncoding.IeeeFloat ||
@@ -565,4 +651,9 @@ internal sealed class MicrophoneCapture : IDisposable
     private static bool IsPcm16(WaveFormat format) => format.BitsPerSample == 16 &&
         (format.Encoding == WaveFormatEncoding.Pcm ||
          (format is WaveFormatExtensible extensible && extensible.SubFormat == AudioMediaSubtypes.MEDIASUBTYPE_PCM));
+
+    // ------------------------------------------------------------------ interop
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
 }

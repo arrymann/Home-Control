@@ -137,6 +137,17 @@ public class ClapDetectorTests
     }
 
     [Fact]
+    public void A_stray_clap_a_while_before_doesnt_matter()
+    {
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddClap(0.8).AddClaps(1.75, 0.3, 2);
+
+            Assert.Equal([2], Listen(signal, [2]).Patterns.Select(p => p.Count));
+        });
+    }
+
+    [Fact]
     public void Sensitivity_decides_how_quiet_a_clap_may_be()
     {
         ForEachRate(rate =>
@@ -156,6 +167,8 @@ public class ClapDetectorTests
     [InlineData(new[] { 0.0, 0.1 }, new[] { 2 })]                       // too close together
     [InlineData(new[] { 0.0, 0.8 }, new[] { 2 })]                       // too far apart
     [InlineData(new[] { 0.0, 0.15, 0.65 }, new[] { 3 })]                // no steady rhythm
+    [InlineData(new[] { 0.0, 0.5, 0.7 }, new[] { 3 })]                  // slowing down then rushing
+    [InlineData(new[] { 0.0, 0.7, 1.0 }, new[] { 2 })]                  // a stray clap just before
     public void Wrong_patterns_are_ignored(double[] times, int[] counts)
     {
         ForEachRate(rate =>
@@ -224,6 +237,54 @@ public class ClapDetectorTests
                 Assert.Empty(Listen(underTalk, [2], sensitivity).Patterns);
                 Assert.Empty(Listen(applause, [2, 3], sensitivity).Patterns);
             }
+        });
+    }
+
+    [Theory]
+    [InlineData(1.0, 1.05)] // a dropout
+    [InlineData(1.0, 4.0)]  // muted for a while
+    public void Clicks_after_digital_silence_are_not_claps(double from, double to)
+    {
+        // Silence measures far below any room; the background must be learned again afterwards,
+        // or dry clicks would pass the "room tail" test against it.
+        ForEachRate(rate =>
+        {
+            foreach (var sensitivity in AllSensitivities)
+            {
+                var signal = new ClapSignals(rate, to + 2).AddClick(to + 0.4, -30).AddClick(to + 0.7, -30);
+                signal.Samples.AsSpan((int)(from * rate), (int)((to - from) * rate)).Clear();
+
+                var heard = Listen(signal, [2, 3], sensitivity);
+
+                Assert.Empty(heard.Patterns);
+                Assert.Equal(0, heard.Claps);
+            }
+        });
+    }
+
+    [Fact]
+    public void Claps_are_heard_again_after_a_mute()
+    {
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 4).AddClaps(2.6, 0.3, 2);
+            signal.Samples.AsSpan(rate, rate).Clear();
+
+            Assert.Equal([2], Listen(signal, [2]).Patterns.Select(p => p.Count));
+        });
+    }
+
+    [Fact]
+    public void A_broken_sample_doesnt_stop_it_hearing()
+    {
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 4).AddClaps(2.5, 0.3, 2);
+            signal.Samples[rate] = float.NaN;
+            signal.Samples[rate * 3 / 2] = float.PositiveInfinity;
+            signal.Samples[rate * 3 / 2 + 1] = float.NegativeInfinity;
+
+            Assert.Equal([2], Listen(signal, [2]).Patterns.Select(p => p.Count));
         });
     }
 
@@ -307,6 +368,25 @@ public class ClapDetectorTests
 
             Assert.Equal([2], whole.Patterns.Select(p => p.Count));
         });
+    }
+
+    [Fact]
+    public void Reset_leaves_nothing_of_the_sound()
+    {
+        // After Reset every field is as in a new detector: nothing derived from the sound remains.
+        var signal = new ClapSignals(48000, 3).AddClaps(1.0, 0.3, 2).AddSpeech(1.8, 2.8);
+        var used = new ClapDetector(48000, ClapSensitivity.High) { Counts = [2] };
+        used.Process(signal.Samples.AsSpan(0, signal.Samples.Length - 1234));
+        used.Reset();
+        var fresh = new ClapDetector(48000, ClapSensitivity.High) { Counts = [2] };
+
+        foreach (var field in typeof(ClapDetector).GetFields(BindingFlags.Instance | BindingFlags.NonPublic))
+        {
+            if (!typeof(Delegate).IsAssignableFrom(field.FieldType))
+            {
+                Assert.Equal(field.GetValue(fresh), field.GetValue(used));
+            }
+        }
     }
 
     [Fact]

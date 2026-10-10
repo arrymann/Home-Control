@@ -32,6 +32,7 @@ internal enum ClapListenerState
 internal sealed class ClapListener : IDisposable
 {
     private const int SmRemoteSession = 0x1000;
+    private const string RemoteDesktopPause = "Paused during Remote Desktop, where the microphone would be the remote one.";
 
     private readonly DispatcherQueue _dispatcher;
     private readonly Func<ClapSettings> _settings;
@@ -54,6 +55,7 @@ internal sealed class ClapListener : IDisposable
         _simulated = simulated;
         _automations.Changed += (_, _) => Update();
         _automations.PcEventOccurred += OnPcEvent;
+        _automations.SessionMoved += OnSessionMoved;
     }
 
     public ClapListenerState State { get; private set; } = ClapListenerState.Off;
@@ -152,7 +154,7 @@ internal sealed class ClapListener : IDisposable
 
         if (IsRemoteSession())
         {
-            return (ClapListenerState.Paused, "Paused during Remote Desktop, where the microphone would be the remote one.");
+            return (ClapListenerState.Paused, RemoteDesktopPause);
         }
 
         return null;
@@ -180,6 +182,7 @@ internal sealed class ClapListener : IDisposable
 
         _disposed = true;
         _automations.PcEventOccurred -= OnPcEvent;
+        _automations.SessionMoved -= OnSessionMoved;
         _capture?.Dispose();
         _capture = null;
     }
@@ -207,8 +210,9 @@ internal sealed class ClapListener : IDisposable
             MicrophoneState.Listening => ClapListenerState.Listening,
             MicrophoneState.Blocked => ClapListenerState.Blocked,
             MicrophoneState.NoMicrophone => ClapListenerState.NoMicrophone,
+            MicrophoneState.RemoteSession => ClapListenerState.Paused,
             _ => ClapListenerState.Retrying,
-        }, detail);
+        }, state == MicrophoneState.RemoteSession ? RemoteDesktopPause : detail);
     }
 
     private void OnPattern(int claps)
@@ -259,6 +263,17 @@ internal sealed class ClapListener : IDisposable
             case PcEvent.Unlocked:
                 Update();
                 break;
+        }
+    }
+
+    /// <summary>Remote Desktop connected or disconnected: close the microphone, or open it again.</summary>
+    private void OnSessionMoved()
+    {
+        var wasOpen = _running;
+        Update();
+        if (wasOpen && _running)
+        {
+            _capture?.Retry(); // it may have held off while the session was remote
         }
     }
 

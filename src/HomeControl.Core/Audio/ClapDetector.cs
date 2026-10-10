@@ -44,6 +44,7 @@ public sealed class ClapDetector
     public const int MaxCount = 4;
 
     private const double WarmUpSeconds = 0.5;
+    private const double SilentEnergy = 1e-15; // -150 dB: no microphone is this quiet, only digital silence
     private const double HoldSeconds = 0.08;
     private const double TailCheckSeconds = 0.04;
     private const double MinGap = 0.12;
@@ -69,6 +70,7 @@ public sealed class ClapDetector
     private double _sumLow;
     private int _samplesInBlock;
     private long _block;
+    private long _learnUntil;
 
     // Levels in dB: background noise per band, and the two blocks before this one.
     private double _floorHigh;
@@ -159,7 +161,8 @@ public sealed class ClapDetector
     {
         foreach (var sample in samples)
         {
-            var full = _highPass.Step(_lowPass.Step(sample));
+            var x = float.IsFinite(sample) ? sample : 0f; // a glitch mustn't poison the filters
+            var full = _highPass.Step(_lowPass.Step(x));
             var high = _highBand.Step(full);
             var low = full - high;
             _sumHigh += high * high;
@@ -184,13 +187,11 @@ public sealed class ClapDetector
     /// <summary>Forgets everything: the filters, the background level and any claps so far.</summary>
     public void Reset()
     {
-        var rate = (double)SampleRate;
-        _lowPass = Biquad.LowPass(rate, Math.Min(7000, 0.45 * rate));
-        _highPass = Biquad.HighPass(rate, 60);
-        _highBand = Biquad.HighPass(rate, 2000);
+        ResetFilters();
         _sumHigh = _sumLow = 0;
         _samplesInBlock = 0;
         _block = 0;
+        _learnUntil = Blocks(WarmUpSeconds);
         _floorHigh = _floorLow = double.NaN;
         _high1 = _high2 = _low1 = _low2 = -200;
         _tracking = _decayed = false;
@@ -201,23 +202,43 @@ public sealed class ClapDetector
         _previousClap = _lastNoise = _lockedUntil = double.NegativeInfinity;
     }
 
+    private void ResetFilters()
+    {
+        var rate = (double)SampleRate;
+        _lowPass = Biquad.LowPass(rate, Math.Min(7000, 0.45 * rate));
+        _highPass = Biquad.HighPass(rate, 60);
+        _highBand = Biquad.HighPass(rate, 2000);
+    }
+
     private static double Decibels(double energy) => 10 * Math.Log10(energy + 1e-20);
 
     private long Blocks(double seconds) => (long)Math.Round(seconds / _blockSeconds);
 
     private void EndBlock()
     {
-        var high = Decibels(_sumHigh / _samplesInBlock);
-        var low = Decibels(_sumLow / _samplesInBlock);
+        var energyHigh = _sumHigh / _samplesInBlock;
+        var energyLow = _sumLow / _samplesInBlock;
+        var high = Decibels(energyHigh);
+        var low = Decibels(energyLow);
         _sumHigh = _sumLow = 0;
         _samplesInBlock = 0;
 
         var thresholds = _thresholds;
-        if (_block * _blockSeconds < WarmUpSeconds)
+        if (!double.IsFinite(high) || !double.IsFinite(low))
         {
-            // Learn the background quickly before judging anything.
-            _floorHigh = double.IsNaN(_floorHigh) ? high : _floorHigh + 0.2 * (high - _floorHigh);
-            _floorLow = double.IsNaN(_floorLow) ? low : _floorLow + 0.2 * (low - _floorLow);
+            ResetFilters(); // overflowed: start the filters again
+            NothingHeard();
+            high = low = -200;
+        }
+        else if (energyHigh + energyLow < SilentEnergy)
+        {
+            NothingHeard(); // digital silence: muted, or a dropout
+        }
+        else if (_block < _learnUntil)
+        {
+            // Learn the background quickly before judging anything (at the start and after silence).
+            _floorHigh = Math.Max(-120, double.IsNaN(_floorHigh) ? high : _floorHigh + 0.2 * (high - _floorHigh));
+            _floorLow = Math.Max(-120, double.IsNaN(_floorLow) ? low : _floorLow + 0.2 * (low - _floorLow));
         }
         else if (_tracking)
         {
@@ -234,6 +255,17 @@ public sealed class ClapDetector
         _low1 = low;
         _block++;
         Advance(_block * _blockSeconds);
+    }
+
+    /// <summary>
+    /// No sound in this block (silence measures far below any room): drop what was being judged
+    /// and learn the background again once there is sound, so it isn't judged against silence.
+    /// </summary>
+    private void NothingHeard()
+    {
+        Interrupt();
+        _floorHigh = _floorLow = double.NaN;
+        _learnUntil = _block + 1 + Blocks(WarmUpSeconds);
     }
 
     /// <summary>Background levels follow the quiet moments: they fall fast and rise slowly.</summary>
@@ -526,6 +558,18 @@ public sealed class ClapDetector
             var y = _b0 * x + _z1;
             _z1 = _b1 * x - _a1 * y + _z2;
             _z2 = _b2 * x - _a2 * y;
+
+            // On silence the state decays into denormal numbers, which are very slow to compute with.
+            if (Math.Abs(_z1) < 1e-30)
+            {
+                _z1 = 0;
+            }
+
+            if (Math.Abs(_z2) < 1e-30)
+            {
+                _z2 = 0;
+            }
+
             return y;
         }
 
