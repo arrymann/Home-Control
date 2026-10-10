@@ -62,13 +62,13 @@ internal sealed class MicrophoneCapture : IDisposable
     private int _channels;
     private long _lastPacket;
     private bool _reportedError;
-    private Exception? _stopError;
+    private int _closing;
 
     // Loop-only state.
     private MMDeviceEnumerator? _enumerator;
     private MMDeviceNotificationClient? _notifications;
     private MMDevice? _device;
-    private WasapiRecorder? _recorder;
+    private Recording? _recording;
     private int _generation;
     private bool _wanted;
     private string? _deviceId;
@@ -210,6 +210,14 @@ internal sealed class MicrophoneCapture : IDisposable
             return Task.CompletedTask;
         }
 
+        if (Volatile.Read(ref _closing) > 0)
+        {
+            // A driver that didn't respond is still being closed: don't pile up more of them.
+            Report(MicrophoneState.Retrying, "The microphone isn't responding");
+            ScheduleRetry(TimeSpan.FromMinutes(1));
+            return Task.CompletedTask;
+        }
+
         if (!quiet || _reported is not (MicrophoneState.Blocked or MicrophoneState.Retrying or MicrophoneState.NoMicrophone))
         {
             Report(MicrophoneState.Starting, null);
@@ -225,7 +233,7 @@ internal sealed class MicrophoneCapture : IDisposable
                 return Task.CompletedTask; // a device notification tries again
             }
 
-            _recorder = StartWithFallbacks(_device, _generation);
+            _recording = StartWithFallbacks(_device, _generation);
             _startedAt = Environment.TickCount64;
             Log.Info($"Listening for claps with “{_device.FriendlyName}”");
             Report(MicrophoneState.Listening, _device.FriendlyName);
@@ -269,11 +277,11 @@ internal sealed class MicrophoneCapture : IDisposable
             return Task.CompletedTask;
         }
 
-        if (_recorder is null)
+        if (_recording is null)
         {
             ScheduleRetry(TimeSpan.FromMilliseconds(500)); // waiting for a microphone: maybe this is it
         }
-        else if (defaultChanged && _deviceId is null && newDefaultId != _recorder.DeviceId)
+        else if (defaultChanged && _deviceId is null && newDefaultId != _recording.Recorder.DeviceId)
         {
             ScheduleRetry(TimeSpan.FromMilliseconds(500)); // follow the new default
         }
@@ -306,7 +314,7 @@ internal sealed class MicrophoneCapture : IDisposable
         return null;
     }
 
-    private WasapiRecorder StartWithFallbacks(MMDevice device, int generation)
+    private Recording StartWithFallbacks(MMDevice device, int generation)
     {
         var monoFloat = WaveFormat.CreateIeeeFloatWaveFormat(RequestedSampleRate, 1);
         try
@@ -329,7 +337,7 @@ internal sealed class MicrophoneCapture : IDisposable
         return StartRecorder(device, format: null, raw: false, generation); // the device's own format, mixed down here
     }
 
-    private WasapiRecorder StartRecorder(MMDevice device, WaveFormat? format, bool raw, int generation)
+    private Recording StartRecorder(MMDevice device, WaveFormat? format, bool raw, int generation)
     {
         var builder = new WasapiRecorderBuilder()
             .WithDevice(device)
@@ -346,6 +354,7 @@ internal sealed class MicrophoneCapture : IDisposable
         }
 
         var recorder = builder.Build(); // may fail with E_ACCESSDENIED
+        var recording = new Recording(recorder);
         var started = false;
         try
         {
@@ -366,35 +375,42 @@ internal sealed class MicrophoneCapture : IDisposable
             recorder.DataAvailable += OnData;
             recorder.RecordingStopped += (_, e) =>
             {
-                var error = e.Exception; // on the capture thread: only queue (disposing here would deadlock)
-                Volatile.Write(ref _stopError, error);
+                // The capture thread's last act. Only note it and queue (disposing here would deadlock).
+                var error = e.Exception;
+                recording.Error = error;
+                recording.Ended.Set();
                 Post(() => OnStopped(generation, error));
             };
-            Volatile.Write(ref _stopError, null);
             recorder.StartRecording(); // may fail: access denied, in use, …
             started = true;
 
             // Hand the recorder over only once it is capturing (see StopAndDispose).
             var deadline = Environment.TickCount64 + 5000;
-            while (recorder.CaptureState == CaptureState.Starting && Environment.TickCount64 < deadline)
+            while (recorder.CaptureState == CaptureState.Starting && !recording.Ended.IsSet && Environment.TickCount64 < deadline)
             {
                 Thread.Sleep(5);
             }
 
-            if (recorder.CaptureState != CaptureState.Capturing)
+            if (recorder.CaptureState != CaptureState.Capturing || recording.Ended.IsSet)
             {
-                throw Volatile.Read(ref _stopError) ?? new TimeoutException("The microphone didn't start");
+                // It stopped as it started (with its own error), or it never finished starting.
+                if (recording.Ended.Wait(recorder.CaptureState == CaptureState.Starting ? 0 : 1000))
+                {
+                    throw recording.Error ?? new InvalidOperationException("The microphone stopped as it started");
+                }
+
+                throw new TimeoutException("The microphone didn't start");
             }
 
             Volatile.Write(ref _lastPacket, Environment.TickCount64);
-            return recorder;
+            return recording;
         }
         catch
         {
             recorder.DataAvailable -= OnData;
             if (started)
             {
-                StopAndDispose(recorder);
+                StopAndDispose(recording);
             }
             else
             {
@@ -409,41 +425,51 @@ internal sealed class MicrophoneCapture : IDisposable
     /// <summary>
     /// Stops a recorder for sure and disposes it. NAudio 3.1.0 loses a stop that arrives while
     /// the device is still starting (its capture thread then sets "capturing" anyway), and its
-    /// Dispose waits for that thread without a limit, so the stop is repeated until it takes.
-    /// A driver that doesn't respond is left to a background thread, so this loop never hangs.
+    /// Dispose waits for that thread without a limit, so the stop is repeated until the thread
+    /// says it has ended. A driver that doesn't respond is left to one background thread (no new
+    /// recorder is opened meanwhile), so this loop never hangs.
     /// </summary>
-    private static void StopAndDispose(WasapiRecorder recorder)
+    private void StopAndDispose(Recording recording)
     {
-        if (TryStop(recorder, TimeSpan.FromSeconds(2)))
+        if (TryStop(recording, TimeSpan.FromSeconds(2)))
         {
-            recorder.Dispose(); // the capture thread has ended
+            recording.Recorder.Dispose(); // the capture thread has ended
+            recording.Ended.Dispose();
             return;
         }
 
         Log.Info("The microphone isn't responding; closing it in the background.");
+        Interlocked.Increment(ref _closing);
         new Thread(() =>
         {
-            while (!TryStop(recorder, TimeSpan.FromSeconds(10)))
+            while (!TryStop(recording, TimeSpan.FromMinutes(1)))
             {
             }
 
-            recorder.Dispose();
+            recording.Recorder.Dispose();
+            recording.Ended.Dispose();
+            Interlocked.Decrement(ref _closing);
+            Log.Info("The microphone that wasn't responding is closed.");
+            Post(() => _wanted && _recording is null ? RestartAsync(quiet: true) : Task.CompletedTask);
         })
         { IsBackground = true, Name = "Closing the microphone" }.Start();
     }
 
-    private static bool TryStop(WasapiRecorder recorder, TimeSpan limit)
+    /// <summary>Asks the recorder to stop, again and again, until its capture thread has ended (or the time is up).</summary>
+    private static bool TryStop(Recording recording, TimeSpan limit)
     {
         var deadline = Environment.TickCount64 + (long)limit.TotalMilliseconds;
-        while (recorder.CaptureState != CaptureState.Stopped)
+        var wait = 10;
+        recording.Recorder.StopRecording();
+        while (!recording.Ended.Wait(wait))
         {
             if (Environment.TickCount64 > deadline)
             {
                 return false;
             }
 
-            recorder.StopRecording();
-            Thread.Sleep(10);
+            recording.Recorder.StopRecording();
+            wait = Math.Min(wait * 2, 500);
         }
 
         return true;
@@ -541,7 +567,7 @@ internal sealed class MicrophoneCapture : IDisposable
     {
         // A capture stream delivers packets (silent ones too) all the time; none for 3 s means it is stuck.
         var now = Environment.TickCount64;
-        if (_wanted && _recorder is { CaptureState: CaptureState.Capturing } &&
+        if (_wanted && _recording is { Recorder.CaptureState: CaptureState.Capturing } &&
             now - _startedAt > 3000 && now - Volatile.Read(ref _lastPacket) > 3000)
         {
             if (now - _startedAt > 60_000)
@@ -612,12 +638,12 @@ internal sealed class MicrophoneCapture : IDisposable
     private void TearDown()
     {
         _generation++; // events from the recorder being closed are old from now on
-        var recorder = _recorder;
-        _recorder = null;
-        if (recorder is not null)
+        var recording = _recording;
+        _recording = null;
+        if (recording is not null)
         {
-            recorder.DataAvailable -= OnData; // from now on nothing more is analysed
-            StopAndDispose(recorder);
+            recording.Recorder.DataAvailable -= OnData; // from now on nothing more is analysed
+            StopAndDispose(recording);
             Log.Info("Stopped listening for claps.");
         }
 
@@ -651,6 +677,17 @@ internal sealed class MicrophoneCapture : IDisposable
     private static bool IsPcm16(WaveFormat format) => format.BitsPerSample == 16 &&
         (format.Encoding == WaveFormatEncoding.Pcm ||
          (format is WaveFormatExtensible extensible && extensible.SubFormat == AudioMediaSubtypes.MEDIASUBTYPE_PCM));
+
+    /// <summary>An opened recorder, and NAudio's word that its capture thread has ended (and why).</summary>
+    private sealed class Recording(WasapiRecorder recorder)
+    {
+        public WasapiRecorder Recorder { get; } = recorder;
+
+        /// <summary>Set by RecordingStopped, the capture thread's last act.</summary>
+        public ManualResetEventSlim Ended { get; } = new();
+
+        public Exception? Error { get; set; }
+    }
 
     // ------------------------------------------------------------------ interop
 

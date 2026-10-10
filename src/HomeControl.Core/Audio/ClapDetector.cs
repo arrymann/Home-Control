@@ -72,9 +72,13 @@ public sealed class ClapDetector
     private long _block;
     private long _learnUntil;
 
-    // Levels in dB: background noise per band, and the two blocks before this one.
+    // Levels in dB: background noise per band (and as it was in the last steady block, before
+    // any fade into silence), and the two blocks before this one.
     private double _floorHigh;
     private double _floorLow;
+    private double _steadyFloorHigh;
+    private double _steadyFloorLow;
+    private bool _wasSilent;
     private double _high1;
     private double _high2;
     private double _low1;
@@ -192,7 +196,8 @@ public sealed class ClapDetector
         _samplesInBlock = 0;
         _block = 0;
         _learnUntil = Blocks(WarmUpSeconds);
-        _floorHigh = _floorLow = double.NaN;
+        _floorHigh = _floorLow = _steadyFloorHigh = _steadyFloorLow = double.NaN;
+        _wasSilent = false;
         _high1 = _high2 = _low1 = _low2 = -200;
         _tracking = _decayed = false;
         _onsetBlock = _peakBlock = 0;
@@ -223,28 +228,47 @@ public sealed class ClapDetector
         _sumHigh = _sumLow = 0;
         _samplesInBlock = 0;
 
+        // Digital silence (muted, a dropout, a noise gate, or a very quiet room through a 16-bit
+        // microphone) says nothing about the room: it never moves the background level, which
+        // would otherwise sink far below the room and let dry clicks pass for claps.
         var thresholds = _thresholds;
+        var silent = energyHigh + energyLow < SilentEnergy;
         if (!double.IsFinite(high) || !double.IsFinite(low))
         {
-            ResetFilters(); // overflowed: start the filters again
-            NothingHeard();
+            ResetFilters(); // overflowed: start the filters again, and drop what was being judged
+            Interrupt();
             high = low = -200;
+            silent = true;
         }
-        else if (energyHigh + energyLow < SilentEnergy)
+
+        if (silent && !_wasSilent && !double.IsNaN(_floorHigh) && !double.IsNaN(_steadyFloorHigh))
         {
-            NothingHeard(); // digital silence: muted, or a dropout
+            // The fade into silence (the filters ringing down) isn't the room either.
+            _floorHigh = Math.Max(_floorHigh, _steadyFloorHigh);
+            _floorLow = Math.Max(_floorLow, _steadyFloorLow);
         }
-        else if (_block < _learnUntil)
+
+        _wasSilent = silent;
+        if (double.IsNaN(_floorHigh) && !silent && _block >= _learnUntil)
         {
-            // Learn the background quickly before judging anything (at the start and after silence).
-            _floorHigh = Math.Max(-120, double.IsNaN(_floorHigh) ? high : _floorHigh + 0.2 * (high - _floorHigh));
-            _floorLow = Math.Max(-120, double.IsNaN(_floorLow) ? low : _floorLow + 0.2 * (low - _floorLow));
+            _learnUntil = _block + Blocks(WarmUpSeconds); // the sound started silent: the room is heard only now
+        }
+
+        if (_block < _learnUntil || double.IsNaN(_floorHigh))
+        {
+            // Learn the background quickly before judging anything.
+            if (!silent)
+            {
+                RememberSteadyFloors(high, low);
+                _floorHigh = Math.Max(-120, double.IsNaN(_floorHigh) ? high : _floorHigh + 0.2 * (high - _floorHigh));
+                _floorLow = Math.Max(-120, double.IsNaN(_floorLow) ? low : _floorLow + 0.2 * (low - _floorLow));
+            }
         }
         else if (_tracking)
         {
             Track(high, low, thresholds);
         }
-        else
+        else if (!silent)
         {
             TryStart(high, low, thresholds);
         }
@@ -257,22 +281,22 @@ public sealed class ClapDetector
         Advance(_block * _blockSeconds);
     }
 
-    /// <summary>
-    /// No sound in this block (silence measures far below any room): drop what was being judged
-    /// and learn the background again once there is sound, so it isn't judged against silence.
-    /// </summary>
-    private void NothingHeard()
-    {
-        Interrupt();
-        _floorHigh = _floorLow = double.NaN;
-        _learnUntil = _block + 1 + Blocks(WarmUpSeconds);
-    }
-
     /// <summary>Background levels follow the quiet moments: they fall fast and rise slowly.</summary>
     private void UpdateFloors(double high, double low)
     {
+        RememberSteadyFloors(high, low);
         _floorHigh = Math.Max(-120, _floorHigh + (high < _floorHigh ? _floorFall : _floorRise) * (high - _floorHigh));
         _floorLow = Math.Max(-120, _floorLow + (low < _floorLow ? _floorFall : _floorRise) * (low - _floorLow));
+    }
+
+    /// <summary>A block close to the background is ordinary room sound: remember the background as it is.</summary>
+    private void RememberSteadyFloors(double high, double low)
+    {
+        if (!double.IsNaN(_floorHigh) && Math.Abs(high - _floorHigh) <= 6 && Math.Abs(low - _floorLow) <= 6)
+        {
+            _steadyFloorHigh = _floorHigh;
+            _steadyFloorLow = _floorLow;
+        }
     }
 
     private void TryStart(double high, double low, Thresholds t)

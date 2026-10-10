@@ -275,6 +275,57 @@ public class ClapDetectorTests
     }
 
     [Fact]
+    public void Hears_claps_through_a_16_bit_microphone_in_a_very_quiet_room()
+    {
+        // Many 10 ms blocks are exactly zero after rounding to 16 bits: that isn't a mute.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3);
+            Array.Clear(signal.Samples);
+            signal.AddNoise(-106).AddClaps(1.0, 0.3, 2);
+            for (var i = 0; i < signal.Samples.Length; i++)
+            {
+                signal.Samples[i] = MathF.Round(signal.Samples[i] * 32768) / 32768;
+            }
+
+            Assert.Equal([2], Listen(signal, [2]).Patterns.Select(p => p.Count));
+        });
+    }
+
+    [Fact]
+    public void Hears_claps_through_a_noise_gate()
+    {
+        // The gate passes only loud sounds: digital silence right before and between the claps.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddClaps(1.0, 0.3, 2);
+            for (var i = 0; i < signal.Samples.Length; i++)
+            {
+                var t = (double)i / rate;
+                var open = t < 0.8 || (t >= 0.998 && t < 1.15) || (t >= 1.298 && t < 1.45);
+                if (!open)
+                {
+                    signal.Samples[i] = 0;
+                }
+            }
+
+            Assert.Equal([2], Listen(signal, [2]).Patterns.Select(p => p.Count));
+        });
+    }
+
+    [Fact]
+    public void Hears_claps_when_the_sound_starts_silent()
+    {
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 4).AddClaps(2.5, 0.3, 2);
+            signal.Samples.AsSpan(0, rate).Clear();
+
+            Assert.Equal([2], Listen(signal, [2]).Patterns.Select(p => p.Count));
+        });
+    }
+
+    [Fact]
     public void A_broken_sample_doesnt_stop_it_hearing()
     {
         ForEachRate(rate =>
