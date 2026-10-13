@@ -20,16 +20,23 @@ public enum ClapSensitivity
 /// then forgotten; every 10 ms the sums become two loudness figures (2–7 kHz, and below 2 kHz)
 /// and start again. All it remembers is a handful of numbers: the filters' state (made from the
 /// last two samples), the background noise level, the last two blocks' loudness and the timing
-/// of the current clap and sequence. <see cref="Reset"/> clears them.
+/// and loudness of the current clap, sequence and last other sounds. <see cref="Reset"/> clears them.
 /// </para>
 /// <para>
 /// A clap is a sharp rise in the high band that dies away like a clap in a room: by 40 ms after
-/// its peak it has dropped by a few dB (speech and music don't) but still has a room tail
-/// (keyboard clicks don't), it has faded within about 150 ms, nothing rises again during an 80 ms
-/// hold, and the high band isn't much quieter than the low band (knocks and thumps are).
-/// Claps in a row are 120–600 ms apart with a steady rhythm. A sequence starts only after 0.8 s
-/// without claps and 0.3 s without other sounds, any other sound during it cancels it, and it is
-/// reported once it is clearly over, so three claps never also count as two.
+/// its peak it has dropped by a few dB (speech and music don't) but still has a loud room tail
+/// (clicks next to the microphone don't), it has faded within about 150 ms, nothing rises again
+/// during an 80 ms hold, and the high band isn't far quieter than the low band (knocks and
+/// thumps are; claps with cupped hands can be 17 dB duller). Its high band also reaches at least
+/// about the level of the room's own low-pitched noise, so the faint ticks and whirs of a machine
+/// humming in the room (a 3D printer, a fan) don't count, however quiet its hiss is.
+/// Claps in a row are 120–600 ms apart in a steady rhythm (no gap over 1.75 times another). A
+/// sequence starts only after 0.8 s without claps (or right after a finished sequence, so a
+/// pattern can be repeated) and 0.3 s without other sounds, any other sound that stands out
+/// during it cancels it, and it is reported once it is clearly over, so three claps never also
+/// count as two. Sounds that don't stand out from the room, and faint high ticks (the low band
+/// hardly rises and the high band stays 10 dB or more below the claps), don't count as other
+/// sounds; voices, music, knocks and anything about as loud as the claps do.
 /// </para>
 /// <para>
 /// Times come from the number of samples processed, not the clock, so the result depends only
@@ -49,10 +56,14 @@ public sealed class ClapDetector
     private const double TailCheckSeconds = 0.04;
     private const double MinGap = 0.12;
     private const double MaxGap = 0.60;
-    private const double MaxRhythmRatio = 2.0;
+    private const double MaxRhythmRatio = 1.75;
     private const double NoiseGuard = 0.30;
     private const double ClapGuard = 0.80;
     private const double ClosingQuiet = 0.25;
+    private const double OnsetSeconds = 0.04;  // a sound may still grow this long after it starts
+    private const double MinOverRoom = -5;     // dB: high band peak against the room's low-band noise
+    private const double TickLowRise = 6;     // dB: a sound whose low band rises less than this is a high tick ...
+    private const double TickBelowClaps = 10; // dB: ... and a tick this far below the claps doesn't count
 
     private readonly int _blockLength;
     private readonly double _blockSeconds;
@@ -93,13 +104,16 @@ public sealed class ClapDetector
     private double _peakLow;
     private double _onsetReference;
 
-    // The claps in a row so far.
+    // The claps in a row so far, and the sounds around them (levels in dB above the background).
     private int _claps;
     private double _lastClap;
     private double _shortestGap;
     private double _longestGap;
+    private double _quietestClap;
     private double _previousClap;
     private double _lastNoise;
+    private double _lastTick;
+    private double _lastTickHigh;
     private double _lockedUntil;
 
     public ClapDetector(int sampleRate, ClapSensitivity sensitivity = ClapSensitivity.Medium)
@@ -185,7 +199,7 @@ public sealed class ClapDetector
     public void Interrupt()
     {
         _tracking = false;
-        Noise(_block * _blockSeconds);
+        Noise(_block * _blockSeconds, double.PositiveInfinity, double.PositiveInfinity);
     }
 
     /// <summary>Forgets everything: the filters, the background level and any claps so far.</summary>
@@ -203,8 +217,8 @@ public sealed class ClapDetector
         _onsetBlock = _peakBlock = 0;
         _peakHigh = _peakLow = _onsetReference = 0;
         _claps = 0;
-        _lastClap = _shortestGap = _longestGap = 0;
-        _previousClap = _lastNoise = _lockedUntil = double.NegativeInfinity;
+        _lastClap = _shortestGap = _longestGap = _quietestClap = _lastTickHigh = 0;
+        _previousClap = _lastNoise = _lastTick = _lockedUntil = double.NegativeInfinity;
     }
 
     private void ResetFilters()
@@ -318,7 +332,7 @@ public sealed class ClapDetector
         // A rise in the low band alone (speech, a knock, a thump) is a sound but not a clap.
         if (low - _floorLow >= t.AboveFloor && low - Math.Max(_low2, _floorLow) >= t.Rise)
         {
-            Noise(_block * _blockSeconds);
+            Noise(_block * _blockSeconds, high - _floorHigh, low - _floorLow);
         }
 
         UpdateFloors(high, low);
@@ -338,17 +352,28 @@ public sealed class ClapDetector
             _peakLow = Math.Max(_peakLow, low);
             if (age == 2 && !(_peakHigh - _floorHigh >= t.AboveFloor && _peakHigh - _onsetReference >= t.Rise && _peakHigh >= t.MinimumLevel))
             {
-                Reject(); // too weak
+                Reject(t); // too weak
             }
 
             return;
         }
 
-        // It rises again (a plosive followed by a vowel, a second click): not a clap; maybe the
-        // start of something new.
-        if (high > _peakHigh + 3 || low > _peakLow + 3 || high - Math.Max(_high2, _floorHigh) >= Math.Min(t.Rise, 10))
+        // Still growing a moment after it began (the hands didn't meet at once): the same sound,
+        // with a later peak.
+        if (age <= Blocks(OnsetSeconds) && high > _peakHigh + 3)
         {
-            Reject();
+            _peakHigh = high;
+            _peakBlock = _block;
+            _peakLow = Math.Max(_peakLow, low);
+            return;
+        }
+
+        // It rises again (a plosive followed by a vowel, a second click): not a clap; maybe the
+        // start of something new. (A rise from before the peak is the peak's own.)
+        if (high > _peakHigh + 3 || low > _peakLow + 3
+            || (_block - 2 > _peakBlock && high - Math.Max(_high2, _floorHigh) >= Math.Min(t.Rise, 10)))
+        {
+            Reject(t);
             TryStart(high, low, t);
             return;
         }
@@ -358,13 +383,13 @@ public sealed class ClapDetector
         {
             if (_peakHigh - high < t.MinDrop)
             {
-                Reject(); // sustained: speech, music
+                Reject(t); // sustained: speech, music
                 return;
             }
 
             if (high - _floorHigh < t.MinTail || _peakHigh - high > t.MaxDrop)
             {
-                Reject(); // dry, no room tail: a keyboard or mouse click
+                Reject(t); // dry, no room tail: a keyboard or mouse click
                 return;
             }
         }
@@ -379,29 +404,38 @@ public sealed class ClapDetector
             }
             else if (sincePeak * _blockSeconds * 1000 > t.DecayWindowMs)
             {
-                Reject(); // doesn't fade like a clap
+                Reject(t); // doesn't fade like a clap
                 return;
             }
         }
 
         if (_decayed && sincePeak >= Blocks(TailCheckSeconds) && age >= Blocks(HoldSeconds))
         {
-            _tracking = false;
-            if (_peakHigh - _peakLow >= t.MinHighOverLow)
+            if (_peakHigh - _peakLow >= t.MinHighOverLow && _peakHigh - _floorLow >= MinOverRoom)
             {
-                Clap(_onsetBlock * _blockSeconds);
+                _tracking = false;
+                Clap(_onsetBlock * _blockSeconds, _peakHigh - _floorHigh);
             }
             else
             {
-                Noise(_onsetBlock * _blockSeconds); // mostly low: a knock or a thump
+                Reject(t); // mostly low (a knock or a thump), or faint next to the room's own noise
             }
         }
     }
 
-    private void Reject()
+    /// <summary>
+    /// Not a clap. It interrupts claps only if it stood out from the room: the faint ticks and
+    /// whirs of a machine, quiet next to the machine's own hum, don't.
+    /// </summary>
+    private void Reject(Thresholds t)
     {
         _tracking = false;
-        Noise(_onsetBlock * _blockSeconds);
+        var stoodOut = (_peakHigh - _floorHigh >= t.AboveFloor && _peakHigh - _floorLow >= MinOverRoom)
+                       || _peakLow - _floorLow >= t.AboveFloor;
+        if (stoodOut)
+        {
+            Noise(_onsetBlock * _blockSeconds, _peakHigh - _floorHigh, _peakLow - _floorLow);
+        }
     }
 
     // ---------------------------------------------------------------- claps in a row
@@ -420,7 +454,8 @@ public sealed class ClapDetector
         return MaxCount;
     }
 
-    private void Clap(double time)
+    /// <param name="level">The clap's high band peak above the background (dB).</param>
+    private void Clap(double time, double level)
     {
         ClapHeard?.Invoke();
         var previous = _previousClap;
@@ -434,7 +469,8 @@ public sealed class ClapDetector
         if (_claps == 0)
         {
             // Only after a quiet moment, so the middle of applause or chatter doesn't start one.
-            if (time - _lastNoise < NoiseGuard || time - previous < ClapGuard)
+            var noisy = time - _lastNoise < NoiseGuard || (time - _lastTick < NoiseGuard && _lastTickHigh > level - TickBelowClaps);
+            if (noisy || time - previous < ClapGuard)
             {
                 _lockedUntil = time + MaxGap;
                 return;
@@ -444,6 +480,7 @@ public sealed class ClapDetector
             _lastClap = time;
             _shortestGap = double.MaxValue;
             _longestGap = 0;
+            _quietestClap = level;
             return;
         }
 
@@ -458,16 +495,29 @@ public sealed class ClapDetector
         _lastClap = time;
         _shortestGap = Math.Min(_shortestGap, gap);
         _longestGap = Math.Max(_longestGap, gap);
+        _quietestClap = Math.Min(_quietestClap, level);
         if (_claps >= 3 && _longestGap > MaxRhythmRatio * _shortestGap)
         {
             Cancel(time); // no steady rhythm
         }
     }
 
-    private void Noise(double time)
+    /// <summary>A sound that isn't a clap, <paramref name="high"/> and <paramref name="low"/> dB above the background at its peak.</summary>
+    private void Noise(double time, double high, double low)
     {
-        _lastNoise = time;
-        if (_claps > 0)
+        if (low >= TickLowRise)
+        {
+            _lastNoise = time;
+        }
+        else
+        {
+            // A high tick (a 3D printer, a fan, a click): it counts only if about as loud as the
+            // claps, so remember the loudest of the last few.
+            _lastTickHigh = time - _lastTick < NoiseGuard ? Math.Max(_lastTickHigh, high) : high;
+            _lastTick = time;
+        }
+
+        if (_claps > 0 && (low >= TickLowRise || high > _quietestClap - TickBelowClaps))
         {
             Cancel(time);
         }
@@ -503,6 +553,11 @@ public sealed class ClapDetector
             var claps = _claps;
             _claps = 0;
             _lockedUntil = now;
+            if (claps >= MinCount)
+            {
+                _previousClap = double.NegativeInfinity; // it's over: the next sequence may follow straight away
+            }
+
             if ((_counts & (1 << claps)) != 0)
             {
                 PatternDetected?.Invoke(claps);
@@ -514,7 +569,7 @@ public sealed class ClapDetector
     /// <param name="AboveFloor">High band peak above the background.</param>
     /// <param name="Rise">High band peak above the level two blocks before.</param>
     /// <param name="MinimumLevel">High band peak level (re full scale).</param>
-    /// <param name="MinHighOverLow">High band peak minus low band peak.</param>
+    /// <param name="MinHighOverLow">High band peak minus low band peak (cupped claps reach -17).</param>
     /// <param name="MinDrop">Least drop 40 ms after the peak (less: sustained).</param>
     /// <param name="MinTail">Least level above the background 40 ms after the peak (less: dry).</param>
     /// <param name="MaxDrop">Most drop 40 ms after the peak (more: dry).</param>
@@ -533,9 +588,9 @@ public sealed class ClapDetector
         double DecayLow,
         double DecayWindowMs)
     {
-        private static readonly Thresholds LowSensitivity = new(28, 18, -45, -5, 4, 8, 18, 12, 10, 120);
-        private static readonly Thresholds MediumSensitivity = new(21, 14, -55, -8, 3, 6, 20, 10, 8, 150);
-        private static readonly Thresholds HighSensitivity = new(15, 10, -65, -12, 2, 3, 24, 8, 6, 200);
+        private static readonly Thresholds LowSensitivity = new(28, 18, -45, -21, 4, 12, 24, 12, 10, 120);
+        private static readonly Thresholds MediumSensitivity = new(21, 14, -55, -22, 3, 10, 24, 10, 8, 150);
+        private static readonly Thresholds HighSensitivity = new(15, 10, -65, -24, 2, 3, 24, 8, 6, 200);
 
         public static Thresholds For(ClapSensitivity sensitivity) => sensitivity switch
         {

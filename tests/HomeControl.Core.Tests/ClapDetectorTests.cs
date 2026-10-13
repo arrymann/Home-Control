@@ -147,6 +147,55 @@ public class ClapDetectorTests
         });
     }
 
+    [Theory]
+    [InlineData(new[] { 2 })]
+    [InlineData(new[] { 2, 3 })]
+    [InlineData(new[] { 2, 3, 4 })]
+    public void A_pattern_can_be_repeated_straight_away(int[] counts)
+    {
+        ForEachRate(rate =>
+        {
+            foreach (var sensitivity in AllSensitivities)
+            {
+                // Double claps again and again (the light didn't react, or another automation),
+                // 0.65, 0.75 and 0.85 s from one pair to the next.
+                var signal = new ClapSignals(rate, 5.5)
+                    .AddClaps(1.0, 0.27, 2).AddClaps(1.92, 0.27, 2).AddClaps(2.94, 0.27, 2).AddClaps(4.06, 0.27, 2);
+
+                Assert.Equal([2, 2, 2, 2], Listen(signal, counts, sensitivity).Patterns.Select(p => p.Count));
+            }
+        });
+    }
+
+    [Fact]
+    public void Two_pairs_close_together_are_two_pairs()
+    {
+        ForEachRate(rate =>
+        {
+            // The pause between the pairs is twice the gap within them: not a steady rhythm of four.
+            var signal = new ClapSignals(rate, 3.5).AddClaps(1.0, 0.25, 2).AddClaps(1.75, 0.25, 2);
+
+            Assert.Equal([2, 2], Listen(signal, [2, 3, 4]).Patterns.Select(p => p.Count));
+        });
+    }
+
+    [Fact]
+    public void Faint_high_ticks_dont_spoil_claps()
+    {
+        ForEachRate(rate =>
+        {
+            foreach (var sensitivity in AllSensitivities)
+            {
+                // A 3D printer: a motor hum, and faint ticks just before the claps and while the
+                // sequence is still open.
+                var signal = new ClapSignals(rate, 3).AddNoise(-50, lowPassHz: 150).AddClaps(1.0, 0.3, 2)
+                    .AddClick(0.85, -30).AddClick(1.45, -30).AddClick(1.6, -30);
+
+                Assert.Equal([2], Listen(signal, [2, 3], sensitivity).Patterns.Select(p => p.Count));
+            }
+        });
+    }
+
     [Fact]
     public void Sensitivity_decides_how_quiet_a_clap_may_be()
     {
@@ -236,6 +285,164 @@ public class ClapDetectorTests
                 Assert.Empty(Listen(knocked, [2], sensitivity).Patterns);
                 Assert.Empty(Listen(underTalk, [2], sensitivity).Patterns);
                 Assert.Empty(Listen(applause, [2, 3], sensitivity).Patterns);
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------- next to a 3D printer
+
+    [Fact]
+    public void Hears_dull_cupped_claps_over_a_3d_printer()
+    {
+        // Cupped hands ring at a few hundred hertz: as loud below 2 kHz as above, or louder. The
+        // second pair is clapped close enough to clip.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 5).AddPrinterRoom()
+                .AddDullClap(1.0, -16).AddDullClap(1.27, -12)
+                .AddDullClap(3.0, -12, clipAt: 0.5).AddDullClap(3.25, -10, clipAt: 0.5);
+
+            foreach (var sensitivity in AllSensitivities)
+            {
+                var heard = Listen(signal, [2], sensitivity);
+
+                Assert.Equal([2, 2], heard.Patterns.Select(p => p.Count));
+                Assert.Equal(4, heard.Claps);
+            }
+        });
+    }
+
+    [Fact]
+    public void Hears_soft_claps_over_a_3d_printer()
+    {
+        // Soft enough that the printer's hum is about as loud as the claps' high band.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddPrinterRoom()
+                .AddClap(1.0, -23, reverb: 0.35, reverbDecay: 0.08)
+                .AddClap(1.27, -22, reverb: 0.35, reverbDecay: 0.08);
+
+            foreach (var sensitivity in AllSensitivities)
+            {
+                Assert.Equal([2], Listen(signal, [2], sensitivity).Patterns.Select(p => p.Count));
+            }
+        });
+    }
+
+    [Fact]
+    public void A_3d_printer_is_not_clapping()
+    {
+        // Its ticks and whirs, and clicks on the desk next to it, at random for 11 seconds.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 12).AddPrinterRoom();
+            for (var t = 0.8; t < 11.5; t += 0.1 + 0.5 * signal.Random())
+            {
+                var kind = signal.Random();
+                if (kind < 0.5)
+                {
+                    signal.AddPrinterTick(t, -52 + 10 * signal.Random(), 0.002 + 0.006 * signal.Random(), 0.02 + 0.06 * signal.Random());
+                }
+                else if (kind < 0.8)
+                {
+                    signal.AddPrinterTick(t, -50 + 8 * signal.Random(), 0.02 + 0.03 * signal.Random(), 0.1 + 0.15 * signal.Random());
+                }
+                else
+                {
+                    signal.AddDeskClick(t, -30 + 10 * signal.Random());
+                }
+            }
+
+            foreach (var sensitivity in AllSensitivities)
+            {
+                var heard = Listen(signal, [2, 3, 4], sensitivity);
+
+                Assert.Empty(heard.Patterns);
+                Assert.Equal(0, heard.Claps);
+            }
+        });
+    }
+
+    [Fact]
+    public void A_loud_click_next_to_the_microphone_is_not_a_clap()
+    {
+        // As loud as a soft clap in the high band, but with no room tail, and faint next to the
+        // printer's hum.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddPrinterRoom().AddDeskClick(1.0, -20).AddDeskClick(1.3, -19);
+
+            foreach (var sensitivity in AllSensitivities)
+            {
+                var heard = Listen(signal, [2], sensitivity);
+
+                Assert.Empty(heard.Patterns);
+                Assert.Equal(0, heard.Claps);
+            }
+        });
+    }
+
+    [Fact]
+    public void Clicks_next_to_the_microphone_are_not_claps_in_a_quiet_room_either()
+    {
+        // With no hum to stand out from, only the missing room tail gives them away. (At High
+        // sensitivity the loudest of them can still pass for a soft clap.)
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 5);
+            for (var i = 0; i < 6; i++)
+            {
+                signal.AddDeskClick(1.0 + 0.5 * i, -34 + i);
+            }
+
+            Assert.Equal(0, Listen(signal, [2], ClapSensitivity.Low).Claps);
+            Assert.Equal(0, Listen(signal, [2], ClapSensitivity.Medium).Claps);
+        });
+    }
+
+    [Fact]
+    public void A_printers_faint_ticks_dont_interrupt_claps()
+    {
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddPrinterRoom().AddClaps(1.0, 0.3, 2)
+                .AddPrinterTick(1.45, -46).AddPrinterTick(1.62, -44, attack: 0.01, decay: 0.15);
+
+            foreach (var sensitivity in AllSensitivities)
+            {
+                Assert.Equal([2], Listen(signal, [2], sensitivity).Patterns.Select(p => p.Count));
+            }
+        });
+    }
+
+    [Fact]
+    public void A_clap_that_starts_softly_is_still_one_clap()
+    {
+        // The hands don't always meet at once: a softer smack 30 ms before the clap is part of it,
+        // not another sound that interrupts the pair.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddClap(1.0).AddClap(1.27, -32).AddClap(1.30, -18);
+
+            foreach (var sensitivity in AllSensitivities)
+            {
+                Assert.Equal([2], Listen(signal, [2], sensitivity).Patterns.Select(p => p.Count));
+            }
+        });
+    }
+
+    [Fact]
+    public void Hears_claps_close_to_the_microphone()
+    {
+        // Close up, the direct sound is far louder than the room's echo: it drops by about 20 dB
+        // in 40 ms, yet the echo is still loud.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddClap(1.0, -12, reverb: 0.1).AddClap(1.3, -12, reverb: 0.1);
+
+            foreach (var sensitivity in AllSensitivities)
+            {
+                Assert.Equal([2], Listen(signal, [2], sensitivity).Patterns.Select(p => p.Count));
             }
         });
     }

@@ -208,6 +208,88 @@ internal sealed class ClapSignals
         return this;
     }
 
+    /// <summary>A steady tone, such as a fan's or a motor's hum.</summary>
+    public ClapSignals AddTone(double frequency, double rmsDb)
+    {
+        var amplitude = Amplitude(rmsDb) * Math.Sqrt(2);
+        var phase = 2 * Math.PI * _random.Uniform();
+        for (var i = 0; i < Samples.Length; i++)
+        {
+            Samples[i] += (float)(amplitude * Math.Sin(2 * Math.PI * frequency * i / Rate + phase));
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    /// A room with a 3D printer running: its fans and motors hum loudly below 500 Hz (the low band
+    /// sits about 35 dB above the high band's background), with a little hiss above.
+    /// </summary>
+    public ClapSignals AddPrinterRoom()
+    {
+        AddNoise(-62);                                        // hiss: the high band's background
+        AddTone(48, -34).AddTone(96, -40).AddTone(192, -33);  // fans
+        Burst(0, (double)Samples.Length / Rate, _ => 1, 60, 300, Amplitude(-26)); // motor rumble
+        return this;
+    }
+
+    /// <summary>
+    /// A 3D printer's tick or whir: a soft hiss above 2 kHz (<paramref name="peakDb"/> re full
+    /// scale) that rises in a few milliseconds (<paramref name="attack"/>) and fades slowly.
+    /// </summary>
+    public ClapSignals AddPrinterTick(double time, double peakDb = -50, double attack = 0.003, double decay = 0.05)
+    {
+        Burst(time, Math.Max(0.3, 6 * decay), t => Math.Min(1, t / attack) * Math.Exp(-t / decay), 2000, 7000, Amplitude(peakDb));
+        return this;
+    }
+
+    /// <summary>
+    /// A click on the desk near the microphone (a mouse, a pen): a bright ring of a few
+    /// milliseconds (<paramref name="peakDb"/> re full scale) and only a faint, short tail,
+    /// nothing like a clap's room tail. The ring is the same at any sample rate.
+    /// </summary>
+    public ClapSignals AddDeskClick(double time, double peakDb = -24)
+    {
+        var amplitude = Amplitude(peakDb);
+        var start = (int)(time * Rate);
+        double[] modes = [2100, 3300, 4600, 5900];
+        for (var k = 0; k < (int)(0.02 * Rate) && start + k < Samples.Length; k++)
+        {
+            var t = (double)k / Rate;
+            double v = 0;
+            for (var m = 0; m < modes.Length; m++)
+            {
+                v += Math.Sin(2 * Math.PI * modes[m] * t + m);
+            }
+
+            Samples[start + k] += (float)(amplitude * 0.5 * Math.Min(1, t / 0.0002) * Math.Exp(-t / 0.0012) * v);
+        }
+
+        Burst(time, 0.2, t => Math.Exp(-t / 0.03), 1500, 7000, amplitude * 0.07);
+        return this;
+    }
+
+    /// <summary>
+    /// A clap with cupped hands: besides the broadband burst, the hollow of the hands rings at
+    /// a few hundred hertz, so the low band is as loud as the high band or louder. Clapped close
+    /// to the microphone it may clip (<paramref name="clipAt"/>, the converter's full scale).
+    /// </summary>
+    public ClapSignals AddDullClap(double time, double peakDb = -14, double body = 6, double clipAt = 0)
+    {
+        AddClap(time, peakDb, reverb: 0.35, reverbDecay: 0.08, lowHz: 600);
+        Burst(time, 0.5, t => Math.Min(1, t / 0.0005) * (Math.Exp(-t / 0.008) + 0.35 * Math.Exp(-t / 0.08)), 250, 900, Amplitude(peakDb) * body);
+        if (clipAt > 0)
+        {
+            var from = (int)(time * Rate);
+            for (var i = from; i < Math.Min(Samples.Length, from + Rate / 2); i++)
+            {
+                Samples[i] = Math.Clamp(Samples[i], (float)-clipAt, (float)clipAt);
+            }
+        }
+
+        return this;
+    }
+
     /// <summary>Band-limited noise (two high-pass and two low-pass stages) shaped by an envelope.</summary>
     private void Burst(double time, double seconds, Func<double, double> envelope, double lowHz, double highHz, double amplitude)
     {
