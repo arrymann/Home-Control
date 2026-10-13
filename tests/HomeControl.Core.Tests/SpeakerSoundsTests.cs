@@ -165,12 +165,12 @@ public class SpeakerSoundsTests
     }
 
     [Fact]
-    public void Playing_unseen_sound_means_no_claps()
+    public void A_speaker_that_cant_be_followed_doesnt_stop_claps()
     {
+        // Another app has a speaker to itself: its sounds can't be told apart, but the user's claps still count.
         var mic = new ClapSignals(48000, 4).AddClaps(1.0, 0.3, 2);
 
-        Assert.Empty(Listen(mic, played: null, sounds: new SpeakerSounds { PlayingUnseen = true }).Patterns);
-        Assert.Equal([2], Listen(mic, played: null, sounds: new SpeakerSounds { PlayingUnseen = false }).Patterns);
+        Assert.Equal([2], Listen(mic, played: null, sounds: new SpeakerSounds { Unfollowed = true }).Patterns);
     }
 
     // ---------------------------------------------------------------- the user's claps
@@ -198,6 +198,63 @@ public class SpeakerSoundsTests
 
             Assert.Equal([2], Listen(mic, played).Patterns);
         });
+    }
+
+    [Fact]
+    public void The_users_claps_over_the_speakers_beat_count()
+    {
+        // A beat plays all along and the room hears it: a wash of cymbals with a snare every
+        // half second. The user claps right on two snares, much more sharply than any of them.
+        // (Before, every snare hid claps for a fifth of a second, so these never counted.)
+        ForEachRate(rate =>
+        {
+            var played = new ClapSignals(rate, 5, seed: 11, room: false).AddNoise(-40).AddClaps(0.5, 0.5, 9, -30);
+            var mic = new ClapSignals(rate, 5, seed: 7).AddPlayed(played, 0.02, -12).AddClaps(1.55, 0.5, 2, -14);
+
+            Assert.Equal([2], Listen(mic, played).Patterns);
+        });
+    }
+
+    [Fact]
+    public void The_speakers_beat_alone_is_not_clapping()
+    {
+        ForEachRate(rate =>
+        {
+            var played = new ClapSignals(rate, 5, seed: 11, room: false).AddNoise(-40).AddClaps(0.5, 0.5, 9, -18);
+            var mic = new ClapSignals(rate, 5, seed: 7).AddPlayed(played, 0.02, -6);
+
+            Assert.Equal(0, Listen(mic, played).Claps);
+        });
+    }
+
+    [Fact]
+    public void A_clap_from_the_speakers_after_a_quiet_moment_explains_one_at_the_microphone()
+    {
+        // The speakers' sound rose from nothing: it can explain a sound as sharp as any clap.
+        var sounds = new SpeakerSounds();
+        var stream = new SpeakerStream(sounds, 48000);
+        stream.Process(VideoClaps(48000).Samples, 20.0);
+
+        Assert.True(sounds.MayExplain(21.05, rise: 60));
+    }
+
+    [Fact]
+    public void A_beat_explains_only_sounds_about_as_sharp_as_itself()
+    {
+        var sounds = new SpeakerSounds();
+        var stream = new SpeakerStream(sounds, 48000);
+        var played = new ClapSignals(48000, 5, seed: 11, room: false).AddNoise(-40).AddClaps(0.5, 0.5, 9, -30);
+        stream.Process(played.Samples, 30.0);
+
+        // The snares rose a little over the cymbals; a sound that rose 40 dB at the microphone isn't one of them.
+        var explainedSoft = false;
+        for (var t = 31.0; t < 34.5; t += 0.01)
+        {
+            explainedSoft |= sounds.MayExplain(t, rise: 6);
+            Assert.False(sounds.MayExplain(t, rise: 40));
+        }
+
+        Assert.True(explainedSoft);
     }
 
     [Fact]

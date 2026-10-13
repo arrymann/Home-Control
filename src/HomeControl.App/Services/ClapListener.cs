@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using HomeControl.Core.Audio;
 using HomeControl.Core.Automations;
 using HomeControl.Core.Settings;
 using Microsoft.UI.Dispatching;
@@ -32,6 +33,7 @@ internal enum ClapListenerState
 internal sealed class ClapListener : IDisposable
 {
     private const int SmRemoteSession = 0x1000;
+    private const int RecentCount = 12;
     private const string RemoteDesktopPause = "Paused during Remote Desktop, where the microphone would be the remote one.";
 
     private readonly DispatcherQueue _dispatcher;
@@ -45,6 +47,7 @@ internal sealed class ClapListener : IDisposable
     private bool _disposed;
     private string? _detail;
     private DateTimeOffset? _lastClap;
+    private readonly List<string> _recent = [];
 
     /// <param name="simulated">Smoke test: never opens the microphone, only shows what it would do.</param>
     public ClapListener(DispatcherQueue dispatcher, Func<ClapSettings> settings, AutomationService automations, bool simulated)
@@ -68,6 +71,16 @@ internal sealed class ClapListener : IDisposable
 
     /// <summary>Raised on the UI thread when <see cref="State"/>, <see cref="StatusText"/> or what was heard changed.</summary>
     public event EventHandler? Changed;
+
+    /// <summary>
+    /// The last sounds the detector judged (newest first), one line each: when, what it made of
+    /// it and a few loudness figures, e.g. "21:04:05  clap  ·  high +45 dB, body +30 dB, …". Only
+    /// in memory, cleared when listening stops; no sound.
+    /// </summary>
+    public IReadOnlyList<string> RecentSounds => _recent;
+
+    /// <summary>Raised on the UI thread when <see cref="RecentSounds"/> changed.</summary>
+    public event EventHandler? Heard;
 
     /// <summary>One line about what it is doing, e.g. "Listening with Microphone Array · heard 2 claps at 21:04".</summary>
     public string StatusText => State switch
@@ -189,10 +202,11 @@ internal sealed class ClapListener : IDisposable
 
     private MicrophoneCapture CreateCapture()
     {
-        // Only the clap count crosses to the UI thread.
+        // Only clap counts and a few numbers per judged sound cross to the UI thread.
         var capture = new MicrophoneCapture(
             claps => _dispatcher.TryEnqueue(() => OnPattern(claps)),
-            () => _dispatcher.TryEnqueue(OnClapHeard));
+            () => _dispatcher.TryEnqueue(OnClapHeard),
+            judgement => _dispatcher.TryEnqueue(() => OnSoundJudged(judgement)));
         capture.StateChanged += (state, detail) => _dispatcher.TryEnqueue(() => OnCaptureState(state, detail));
         return capture;
     }
@@ -225,7 +239,50 @@ internal sealed class ClapListener : IDisposable
         LastPattern = (claps, DateTimeOffset.Now);
         Log.Info($"Heard {claps} claps.");
         _automations.HandleClaps(claps);
+        Remember($"{DateTimeOffset.Now:HH:mm:ss}  → {claps} claps in a row");
         Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnSoundJudged(ClapJudgement judgement)
+    {
+        if (_disposed || !_running)
+        {
+            return;
+        }
+
+        Remember($"{DateTimeOffset.Now:HH:mm:ss}  {Describe(judgement)}");
+    }
+
+    private void Remember(string line)
+    {
+        _recent.Insert(0, line);
+        if (_recent.Count > RecentCount)
+        {
+            _recent.RemoveAt(_recent.Count - 1);
+        }
+
+        Heard?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>What it made of a sound, and the figures it went by.</summary>
+    internal static string Describe(ClapJudgement judgement)
+    {
+        var verdict = judgement.Verdict switch
+        {
+            ClapVerdict.Clap => "clap",
+            ClapVerdict.ClapNotCounted => "clap, not counted (other sounds or claps just before, or out of step)",
+            ClapVerdict.TooQuiet => "not a clap: too quiet over the room's sound",
+            ClapVerdict.RoseAgain => "not a clap: rose again (two sounds, or speech)",
+            ClapVerdict.Sustained => "not a clap: lasted (speech, music)",
+            ClapVerdict.NoRoomTail => "not a clap: stopped dead (a click next to the microphone)",
+            ClapVerdict.DidntFade => "not a clap: didn't fade like a clap",
+            ClapVerdict.TooLowPitched => "not a clap: too low-pitched (a knock, a thump)",
+            ClapVerdict.NoBody => "not a clap: no lower body (a click, a machine's tick)",
+            ClapVerdict.FromSpeakers => "not a clap: from the PC's speakers",
+            _ => judgement.Verdict.ToString(),
+        };
+        var drop = double.IsNaN(judgement.Drop) ? string.Empty : $", drop {judgement.Drop:0} dB";
+        return $"{verdict}  ·  high {judgement.High:+0;-0;0} dB, body {judgement.Body:+0;-0;0} dB, high−low {judgement.HighOverLow:+0;-0;0} dB{drop}";
     }
 
     private void OnClapHeard()
@@ -290,6 +347,11 @@ internal sealed class ClapListener : IDisposable
         if (wasListening != IsListening)
         {
             _lastClap = null;
+            if (_recent.Count > 0)
+            {
+                _recent.Clear();
+                Heard?.Invoke(this, EventArgs.Empty);
+            }
         }
 
         Changed?.Invoke(this, EventArgs.Empty);

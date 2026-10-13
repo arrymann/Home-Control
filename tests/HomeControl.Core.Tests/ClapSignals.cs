@@ -52,7 +52,7 @@ internal sealed class ClapSignals
     /// room's reverberation (relative level <paramref name="reverb"/>, decay <paramref name="reverbDecay"/>).
     /// </summary>
     public ClapSignals AddClap(double time, double peakDb = -20, double direct = 0.004, double reverb = 0.25,
-        double reverbDecay = 0.07, double lowHz = 800, double highHz = 6000)
+        double reverbDecay = 0.07, double lowHz = 400, double highHz = 6000)
     {
         Burst(time, 8 * Math.Max(direct, reverbDecay),
             t => Math.Min(1, t / 0.0003) * (Math.Exp(-t / direct) + reverb * Math.Exp(-t / reverbDecay)),

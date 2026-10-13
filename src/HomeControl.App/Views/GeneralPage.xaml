@@ -96,10 +96,24 @@
                             <FontIcon Glyph="&#xE8A7;" />
                         </toolkit:SettingsCard.ActionIcon>
                     </toolkit:SettingsCard>
+                    <toolkit:SettingsCard
+                        ContentAlignment="Vertical"
+                        Description="The last sounds it judged while listening, and why each did or didn't count, with the loudness figures it went by. Kept only in memory, without the sound itself."
+                        Header="What it hears">
+                        <StackPanel HorizontalAlignment="Stretch" Spacing="8">
+                            <TextBlock
+                                x:Name="ClapHeardText"
+                                FontFamily="Consolas"
+                                FontSize="12"
+                                IsTextSelectionEnabled="True"
+                                TextWrapping="Wrap" />
+                            <Button Click="OnClapCopyClick" Content="Copy" />
+                        </StackPanel>
+                    </toolkit:SettingsCard>
                     <toolkit:SettingsCard ContentAlignment="Left">
                         <TextBlock
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="No sound is kept. It is analysed as it arrives, 10 ms at a time, and reduced to two loudness figures; the sound itself is never recorded, saved, logged or sent anywhere. The microphone is open only while this is on and an enabled automation has a Claps trigger (Automations page). What the PC plays on its speakers (not headphones) is followed the same way, so claps in videos, games or music don't count."
+                            Text="No sound is kept. It is analysed as it arrives, 10 ms at a time, and reduced to a few loudness figures; the sound itself is never recorded, saved, logged or sent anywhere. The microphone is open only while this is on and an enabled automation has a Claps trigger (Automations page). What the PC plays on its speakers (not headphones) is followed the same way, so claps in videos, games or music don't count."
                             TextWrapping="Wrap" />
                     </toolkit:SettingsCard>
                 </toolkit:SettingsExpander.Items>

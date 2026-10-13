@@ -50,6 +50,7 @@ internal sealed class MicrophoneCapture : IDisposable
 
     private readonly Action<int> _patternDetected;
     private readonly Action _clapHeard;
+    private readonly Action<ClapJudgement> _soundJudged;
     private readonly Channel<Func<Task>> _queue = Channel.CreateUnbounded<Func<Task>>(new UnboundedChannelOptions { SingleReader = true });
     private readonly Task _loop;
     private readonly Timer _watchdog;
@@ -64,6 +65,7 @@ internal sealed class MicrophoneCapture : IDisposable
     private int _channels;
     private long _lastPacket;
     private bool _reportedError;
+    private bool _reportedSpeakerError;
     private int _closing;
 
     // Loop-only state.
@@ -81,10 +83,12 @@ internal sealed class MicrophoneCapture : IDisposable
 
     /// <param name="patternDetected">Claps in a row; called on the capture thread.</param>
     /// <param name="clapHeard">A single clap; called on the capture thread.</param>
-    public MicrophoneCapture(Action<int> patternDetected, Action clapHeard)
+    /// <param name="soundJudged">What the detector made of each sound it judged (a few numbers, no sound); called on the capture thread.</param>
+    public MicrophoneCapture(Action<int> patternDetected, Action clapHeard, Action<ClapJudgement> soundJudged)
     {
         _patternDetected = patternDetected;
         _clapHeard = clapHeard;
+        _soundJudged = soundJudged;
         _loop = Task.Run(RunLoopAsync);
         _watchdog = new Timer(_ => Post(CheckStalled), null, 2000, 2000);
     }
@@ -382,7 +386,7 @@ internal sealed class MicrophoneCapture : IDisposable
 
             // What the speakers play, so their claps aren't taken for the user's.
             var speakers = new SpeakerTaps();
-            speakers.UnseenChanged += () => Post(() =>
+            speakers.UnfollowedChanged += () => Post(() =>
             {
                 if (_wanted && _recording is not null && _speakerTaps == speakers)
                 {
@@ -401,9 +405,10 @@ internal sealed class MicrophoneCapture : IDisposable
             var detector = new ClapDetector(waveFormat.SampleRate, (ClapSensitivity)_sensitivity) { Counts = _counts, Speakers = speakers.Sounds };
             detector.PatternDetected += _patternDetected;
             detector.ClapHeard += _clapHeard;
+            detector.SoundJudged += _soundJudged;
             _micClock = new PacketClock(waveFormat.SampleRate);
             _detector = detector;
-            _reportedError = false;
+            _reportedError = _reportedSpeakerError = false;
 
             recorder.DataAvailable += OnData;
             recorder.RecordingStopped += (_, e) =>
@@ -523,8 +528,9 @@ internal sealed class MicrophoneCapture : IDisposable
         try
         {
             // First everything the speakers have played up to now, so that a clap of theirs is
-            // known before the microphone's echo of it is judged.
-            _speakerTaps?.Drain();
+            // known before the microphone's echo of it is judged. Whatever goes wrong there, the
+            // microphone's sound is still analysed.
+            DrainSpeakers();
 
             if ((flags & AudioClientBufferFlags.DataDiscontinuity) != 0)
             {
@@ -547,6 +553,22 @@ internal sealed class MicrophoneCapture : IDisposable
             {
                 _reportedError = true;
                 Log.Error("Analysing microphone sound", ex);
+            }
+        }
+    }
+
+    private void DrainSpeakers()
+    {
+        try
+        {
+            _speakerTaps?.Drain();
+        }
+        catch (Exception ex)
+        {
+            if (!_reportedSpeakerError)
+            {
+                _reportedSpeakerError = true;
+                Log.Error("Following the speakers", ex);
             }
         }
     }
@@ -699,6 +721,7 @@ internal sealed class MicrophoneCapture : IDisposable
             _detector = null;
             detector.PatternDetected -= _patternDetected;
             detector.ClapHeard -= _clapHeard;
+            detector.SoundJudged -= _soundJudged;
             detector.Reset();
         }
 
@@ -711,8 +734,8 @@ internal sealed class MicrophoneCapture : IDisposable
     private void ReportListening()
     {
         var name = _device?.FriendlyName ?? "the microphone";
-        Report(MicrophoneState.Listening, _speakerTaps?.Sounds.PlayingUnseen == true
-            ? $"{name}, but claps don't count while another app has the speakers to itself"
+        Report(MicrophoneState.Listening, _speakerTaps?.Sounds.Unfollowed == true
+            ? $"{name} (another app has a speaker to itself, so claps it plays may count)"
             : name);
     }
 

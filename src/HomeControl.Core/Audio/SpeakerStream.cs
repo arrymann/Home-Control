@@ -15,7 +15,8 @@ namespace HomeControl.Core.Audio;
 /// A sharp sound is a rise in that band of at least 6 dB within 30 ms: gentler than any rise
 /// the detector takes for a clap, since the way through the room can only blur a sound, not
 /// sharpen it. It may reach the microphone from <see cref="MinDelay"/> to <see cref="MaxDelay"/>
-/// after the loopback stream has it.
+/// after the loopback stream has it, and is marked with how sharply it rose, so that the user's
+/// sharper claps over it still count.
 /// </para>
 /// <para>
 /// Times are seconds on the clock the detector uses too (the loopback packet's QPC position).
@@ -187,7 +188,7 @@ public sealed class SpeakerStream
                 _tracking = false;
                 if (_peak - _onsetReference >= Rise && _peak >= MinimumLevel)
                 {
-                    _sounds.Add(_onsetTime + _minDelay, _onsetTime + _maxDelay);
+                    _sounds.Add(_onsetTime + _minDelay, _onsetTime + _maxDelay, _peak - _onsetReference);
                 }
             }
         }
@@ -195,7 +196,7 @@ public sealed class SpeakerStream
         {
             if (high - reference >= Rise && high >= MinimumLevel)
             {
-                _sounds.Add(_blockStart + _minDelay, _blockStart + _maxDelay);
+                _sounds.Add(_blockStart + _minDelay, _blockStart + _maxDelay, high - reference);
             }
             else
             {

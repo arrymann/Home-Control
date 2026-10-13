@@ -6,6 +6,7 @@ using HomeControl.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace HomeControl.Views;
 
@@ -50,8 +51,10 @@ public sealed partial class GeneralPage : Page
 
         _current = this;
         App.Host.Claps.Changed += OnClapsChanged;
+        App.Host.Claps.Heard += OnClapsHeard;
         App.Host.SettingsApplied += OnClapsChanged;
         UpdateClapStatus();
+        ShowHeard();
         _ = LoadMicrophonesAsync();
     }
 
@@ -59,6 +62,7 @@ public sealed partial class GeneralPage : Page
     {
         base.OnNavigatedFrom(e);
         App.Host.Claps.Changed -= OnClapsChanged;
+        App.Host.Claps.Heard -= OnClapsHeard;
         App.Host.SettingsApplied -= OnClapsChanged;
         if (_current == this)
         {
@@ -78,11 +82,31 @@ public sealed partial class GeneralPage : Page
 
     private void OnClapsChanged(object? sender, EventArgs e) => UpdateClapStatus();
 
+    private void OnClapsHeard(object? sender, EventArgs e) => ShowHeard();
+
+    private void ShowHeard()
+    {
+        var recent = App.Host.Claps.RecentSounds;
+        ClapHeardText.Text = recent.Count > 0
+            ? string.Join("\n", recent)
+            : App.Host.Claps.IsListening
+                ? "Nothing yet. Clap twice, or make the sound that set it off, and it shows up here."
+                : "Shows up here while it listens.";
+    }
+
+    private void OnClapCopyClick(object sender, RoutedEventArgs e)
+    {
+        var package = new DataPackage();
+        package.SetText($"Home Control, clap sensitivity {Settings.Claps.Sensitivity}:\n{string.Join("\n", App.Host.Claps.RecentSounds)}");
+        Clipboard.SetContent(package);
+    }
+
     private void UpdateClapStatus()
     {
         var claps = App.Host.Claps;
         ClapExpander.Description = claps.StatusText;
         ClapBlockedBar.IsOpen = claps.State == ClapListenerState.Blocked;
+        ShowHeard();
 
         // Also changed from the tray menu.
         var loading = _loading;

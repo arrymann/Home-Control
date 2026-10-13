@@ -110,9 +110,9 @@ public class ClapDetectorTests
         ForEachRate(rate =>
         {
             var fan = new ClapSignals(rate, 3).AddNoise(-40, lowPassHz: 150).AddClaps(1.0, 0.3, 2);
-            var music = new ClapSignals(rate, 4).AddMusic(0, 4, -30, kick: false).AddClaps(1.6, 0.3, 2, -18);
+            var music = new ClapSignals(rate, 4).AddMusic(0, 4, -36, kick: false).AddClaps(1.6, 0.3, 2, -18); // louder music hides the claps' body
             var talk = new ClapSignals(rate, 4).AddSpeech(0.8, 1.6).AddClaps(2.25, 0.3, 2);
-            var narrow = new ClapSignals(rate, 3).AddClap(1.0, lowHz: 1000, highHz: 3000).AddClap(1.3, lowHz: 1000, highHz: 3000);
+            var narrow = new ClapSignals(rate, 3).AddClap(1.0, lowHz: 400, highHz: 3000).AddClap(1.3, lowHz: 400, highHz: 3000); // a voice-band microphone
 
             Assert.Equal([2], Listen(fan, [2]).Patterns.Select(p => p.Count));
             Assert.Equal([2], Listen(music, [2]).Patterns.Select(p => p.Count));
@@ -643,6 +643,30 @@ public class ClapDetectorTests
     public void Needs_a_usable_sample_rate()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new ClapDetector(4000));
+    }
+
+    // ---------------------------------------------------------------- what it tells the user
+
+    [Fact]
+    public void Says_what_it_made_of_each_sound()
+    {
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 7).AddClaps(1.0, 0.3, 2).AddPrinterTick(3.0, -30).AddClap(4.5).AddClap(4.6);
+            var detector = new ClapDetector(rate) { Counts = [2] };
+            var judged = new List<ClapJudgement>();
+            detector.SoundJudged += judged.Add;
+            detector.Process(signal.Samples);
+
+            Assert.Equal(
+                [ClapVerdict.Clap, ClapVerdict.Clap, ClapVerdict.NoBody, ClapVerdict.Clap, ClapVerdict.ClapNotCounted],
+                judged.Select(j => j.Verdict));
+
+            // The figures it went by: the claps rose far over the room, in the high band and the
+            // body; the tick's body, if it rose at all, is far below its high band.
+            Assert.All(judged.Where(j => j.Verdict == ClapVerdict.Clap), j => Assert.True(j.High > 30 && j.Body > 15, j.ToString()));
+            Assert.True(judged[2].High > 30, judged[2].ToString());
+        });
     }
 
     // ---------------------------------------------------------------- it keeps no sound

@@ -55,10 +55,10 @@ internal sealed class SpeakerTaps : IDisposable
     public SpeakerSounds Sounds { get; } = new();
 
     /// <summary>
-    /// <see cref="SpeakerSounds.PlayingUnseen"/> changed (on the capture thread, the loop thread
-    /// or the retry timer): claps stopped or started counting again.
+    /// <see cref="SpeakerSounds.Unfollowed"/> changed (on the capture thread, the loop thread or
+    /// the retry timer): a speaker device stopped or started being followed again.
     /// </summary>
-    public event Action? UnseenChanged;
+    public event Action? UnfollowedChanged;
 
     /// <summary>For the status line: the devices followed, and any that can't be.</summary>
     public string Description { get; private set; } = string.Empty;
@@ -106,8 +106,8 @@ internal sealed class SpeakerTaps : IDisposable
                     (old, _taps) = (_taps, []);
                 }
 
-                // Fail closed: an exclusive-mode app may be playing anything.
-                SetUnseen(inUse && !_disposed);
+                // An exclusive-mode app may be playing anything: say so (claps still count).
+                SetUnfollowed(inUse && !_disposed);
                 Description = string.Join(", ", notes);
 
                 // Under the lock, so a stream that fails right after the swap still gets its retry.
@@ -120,7 +120,7 @@ internal sealed class SpeakerTaps : IDisposable
             // No Drain can be reading these any more: it only reads the array under the lock.
             foreach (var tap in old)
             {
-                tap.Dispose();
+                CloseQuietly(tap);
             }
         }
     }
@@ -205,21 +205,21 @@ internal sealed class SpeakerTaps : IDisposable
 
             if (failed && !_retryArmed && !_disposed)
             {
-                // A device went away or was taken exclusively: no claps until it's looked at again (off
-                // this thread, once: the failed stream keeps failing until Reopen swaps it out).
+                // A device went away or was taken exclusively: look at it again (off this thread,
+                // once: the failed stream keeps failing until Reopen swaps it out).
                 _retryArmed = true;
-                SetUnseen(true);
+                SetUnfollowed(true);
                 _retry.Change(500, Timeout.Infinite);
             }
         }
     }
 
-    private void SetUnseen(bool unseen)
+    private void SetUnfollowed(bool unfollowed)
     {
-        if (Sounds.PlayingUnseen != unseen)
+        if (Sounds.Unfollowed != unfollowed)
         {
-            Sounds.PlayingUnseen = unseen;
-            UnseenChanged?.Invoke();
+            Sounds.Unfollowed = unfollowed;
+            UnfollowedChanged?.Invoke();
         }
     }
 
@@ -244,11 +244,23 @@ internal sealed class SpeakerTaps : IDisposable
             _retry.Dispose();
             foreach (var tap in old)
             {
-                tap.Dispose();
+                CloseQuietly(tap);
             }
 
             Sounds.Reset(); // the detector is no longer used (its capture thread has ended)
             _enumerator.Dispose();
+        }
+    }
+
+    private static void CloseQuietly(Tap tap)
+    {
+        try
+        {
+            tap.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"Closing a speaker's stream: {ex.GetType().Name} 0x{ex.HResult:X8}");
         }
     }
 
@@ -399,9 +411,11 @@ internal sealed class SpeakerTaps : IDisposable
 
                 return true;
             }
-            catch (COMException)
+            catch (Exception)
             {
-                _failed = true; // AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_DEVICE_IN_USE, ...: for good
+                // AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_DEVICE_IN_USE, ...: for good. Never let
+                // it reach the microphone's analysis.
+                _failed = true;
                 return false;
             }
         }
@@ -417,7 +431,7 @@ internal sealed class SpeakerTaps : IDisposable
             {
                 _client.Stop();
             }
-            catch (COMException)
+            catch (Exception)
             {
                 // Already gone.
             }
@@ -468,7 +482,9 @@ internal sealed class SpeakerTaps : IDisposable
 /// <summary>
 /// When a capture packet's first frame was recorded, in seconds on the QPC clock both streams
 /// share: the packet's own QPC position when Windows gives a sane one, else counted on from the
-/// last sane one by device position, else (last resort) when the packet was read.
+/// last time it had one by device position, else (last resort) when the packet was read, which
+/// then becomes the point to count on from. Counting on keeps a stream's packets in step even
+/// when they are read in a burst, so they never look like a sound starting from silence.
 /// </summary>
 internal sealed class PacketClock(int sampleRate)
 {
@@ -489,9 +505,16 @@ internal sealed class PacketClock(int sampleRate)
         var counted = devicePosition - _anchorPosition;
         if (!double.IsNaN(_anchorTime) && counted >= 0 && counted < 60L * sampleRate)
         {
-            return _anchorTime + counted / (double)sampleRate;
+            var time = _anchorTime + counted / (double)sampleRate;
+            if (time <= now + 0.05 && time >= now - 1.5)
+            {
+                return time;
+            }
         }
 
-        return now - frames / (double)sampleRate;
+        var arrived = now - frames / (double)sampleRate;
+        _anchorTime = arrived;
+        _anchorPosition = devicePosition;
+        return arrived;
     }
 }

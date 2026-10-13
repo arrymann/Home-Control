@@ -11,25 +11,70 @@ public enum ClapSensitivity
     High,
 }
 
+/// <summary>What <see cref="ClapDetector"/> made of a sound it judged.</summary>
+public enum ClapVerdict
+{
+    /// <summary>A clap, counted towards claps in a row.</summary>
+    Clap,
+
+    /// <summary>A clap, but it couldn't start or continue claps in a row: other sounds or claps just before it, or out of step.</summary>
+    ClapNotCounted,
+
+    /// <summary>It didn't rise far enough over the room's own sound.</summary>
+    TooQuiet,
+
+    /// <summary>It rose again soon after (two sounds in a row, or speech).</summary>
+    RoseAgain,
+
+    /// <summary>It lasted (speech, music).</summary>
+    Sustained,
+
+    /// <summary>It stopped dead, with no room echo (a click next to the microphone).</summary>
+    NoRoomTail,
+
+    /// <summary>It didn't fade away like a clap.</summary>
+    DidntFade,
+
+    /// <summary>Mostly low-pitched (a knock or a thump).</summary>
+    TooLowPitched,
+
+    /// <summary>Only high-pitched, with no lower body (a click or a machine's tick).</summary>
+    NoBody,
+
+    /// <summary>The PC's own speakers had just played a sound as sharp.</summary>
+    FromSpeakers,
+}
+
+/// <summary>
+/// A few numbers about a sound the detector judged, to show why it did or didn't count (no
+/// sound): its verdict, how far its high band (2–7 kHz) and body (500 Hz–1.2 kHz) rose over the
+/// room's background, its high band against everything below 2 kHz, and how much it had dropped
+/// 40 ms after its peak (NaN if it was judged before then). Levels in dB.
+/// </summary>
+public readonly record struct ClapJudgement(ClapVerdict Verdict, double High, double Body, double HighOverLow, double Drop);
+
 /// <summary>
 /// Hears claps in microphone sound and recognises 2, 3 or 4 claps in a row.
 /// </summary>
 /// <remarks>
 /// <para>
-/// It keeps no sound. Each sample goes through three filters and is added to two running sums,
-/// then forgotten; every 10 ms the sums become two loudness figures (2–7 kHz, and below 2 kHz)
-/// and start again. All it remembers is a handful of numbers: the filters' state (made from the
-/// last two samples), the background noise level, the last two blocks' loudness and the timing
-/// and loudness of the current clap, sequence and last other sounds. <see cref="Reset"/> clears them.
+/// It keeps no sound. Each sample goes through a few filters and is added to three running
+/// sums, then forgotten; every 10 ms the sums become three loudness figures (2–7 kHz, the body
+/// band 500 Hz–1.2 kHz, and below 2 kHz) and start again. All it remembers is a handful of
+/// numbers: the filters' state (made from the last two samples), the background noise level,
+/// the last two blocks' loudness and the timing and loudness of the current clap, sequence and
+/// last other sounds. <see cref="Reset"/> clears them.
 /// </para>
 /// <para>
 /// A clap is a sharp rise in the high band that dies away like a clap in a room: by 40 ms after
 /// its peak it has dropped by a few dB (speech and music don't) but still has a loud room tail
 /// (clicks next to the microphone don't), it has faded within about 150 ms, nothing rises again
 /// during an 80 ms hold, and the high band isn't far quieter than the low band (knocks and
-/// thumps are; claps with cupped hands can be 17 dB duller). Its high band also reaches at least
-/// about the level of the room's own low-pitched noise, so the faint ticks and whirs of a machine
-/// humming in the room (a 3D printer, a fan) don't count, however quiet its hiss is.
+/// thumps are; claps with cupped hands can be 17 dB duller). It also has a body: hands meeting
+/// sound from about 500 Hz up, so the body band rises over its background too and isn't far
+/// quieter than the high band, while clicks, taps and a machine's ticks (a 3D printer's) are only
+/// high-pitched. Every test compares a band with its own background or with another band of the
+/// same sound, never with the room's other noise, so a loud hum doesn't hide claps.
 /// Claps in a row are 120–600 ms apart in a steady rhythm (no gap over 1.75 times another). A
 /// sequence starts only after 0.8 s without claps (or right after a finished sequence, so a
 /// pattern can be repeated) and 0.3 s without other sounds, any other sound that stands out
@@ -41,8 +86,9 @@ public enum ClapSensitivity
 /// and anything about as loud as the claps do.
 /// </para>
 /// <para>
-/// A clap that starts when a sound from the PC's own speakers may be reaching the microphone
-/// (see <see cref="Speakers"/>) is taken for theirs, not the user's.
+/// A clap that starts when a sound from the PC's own speakers may be reaching the microphone,
+/// and rises no more sharply than that sound did (see <see cref="Speakers"/>), is taken for
+/// theirs, not the user's.
 /// </para>
 /// <para>
 /// Times come from the number of samples processed, not the clock, so the result depends only
@@ -67,7 +113,8 @@ public sealed class ClapDetector
     private const double ClapGuard = 0.80;
     private const double ClosingQuiet = 0.25;
     private const double OnsetSeconds = 0.04;  // a sound may still grow this long after it starts
-    private const double MinOverRoom = -5;     // dB: high band peak against the room's low-band noise
+    private const double BodyFrom = 500;      // Hz: the body of a clap (the hands' hollow, the slap of palms), above most hum ...
+    private const double BodyTo = 1200;       // ... and below the ring of clicks and machine ticks
     private const double TickLowRise = 6;     // dB: a sound whose low band rises less than this is a high tick ...
     private const double TickBelowClaps = 10; // dB: ... and a tick this far below the claps doesn't count
     private const double BlockedQuiet = 0.45; // s: a blocked try is over after this long without claps
@@ -85,8 +132,13 @@ public sealed class ClapDetector
     private Biquad _lowPass;
     private Biquad _highPass;
     private Biquad _highBand;
+    private Biquad _bodyHighPass1;
+    private Biquad _bodyHighPass2;
+    private Biquad _bodyLowPass1;
+    private Biquad _bodyLowPass2;
     private double _sumHigh;
     private double _sumLow;
+    private double _sumBody;
     private int _samplesInBlock;
     private long _block;
     private long _learnUntil;
@@ -98,8 +150,10 @@ public sealed class ClapDetector
     // any fade into silence), and the two blocks before this one.
     private double _floorHigh;
     private double _floorLow;
+    private double _floorBody;
     private double _steadyFloorHigh;
     private double _steadyFloorLow;
+    private double _steadyFloorBody;
     private bool _wasSilent;
     private double _high1;
     private double _high2;
@@ -113,7 +167,9 @@ public sealed class ClapDetector
     private long _peakBlock;
     private double _peakHigh;
     private double _peakLow;
+    private double _peakBody;
     private double _onsetReference;
+    private double _drop;
 
     // The claps in a row so far, and the sounds around them (levels in dB above the background).
     private int _claps;
@@ -151,6 +207,12 @@ public sealed class ClapDetector
 
     /// <summary>A single clap was heard (whether or not it becomes a pattern), e.g. to show that claps are heard.</summary>
     public event Action? ClapHeard;
+
+    /// <summary>
+    /// Every sound it judged, clap or not, with a few numbers about it (no sound): to show the
+    /// user why a clap did or didn't count.
+    /// </summary>
+    public event Action<ClapJudgement>? SoundJudged;
 
     public int SampleRate { get; }
 
@@ -218,8 +280,10 @@ public sealed class ClapDetector
             var full = _highPass.Step(_lowPass.Step(x));
             var high = _highBand.Step(full);
             var low = full - high;
+            var body = _bodyLowPass2.Step(_bodyLowPass1.Step(_bodyHighPass2.Step(_bodyHighPass1.Step(full))));
             _sumHigh += high * high;
             _sumLow += low * low;
+            _sumBody += body * body;
             if (++_samplesInBlock == _blockLength)
             {
                 EndBlock();
@@ -241,17 +305,18 @@ public sealed class ClapDetector
     public void Reset()
     {
         ResetFilters();
-        _sumHigh = _sumLow = 0;
+        _sumHigh = _sumLow = _sumBody = 0;
         _samplesInBlock = 0;
         _block = 0;
         _clockOffset = 0;
         _learnUntil = Blocks(WarmUpSeconds);
-        _floorHigh = _floorLow = _steadyFloorHigh = _steadyFloorLow = double.NaN;
+        _floorHigh = _floorLow = _floorBody = _steadyFloorHigh = _steadyFloorLow = _steadyFloorBody = double.NaN;
         _wasSilent = false;
         _high1 = _high2 = _low1 = _low2 = -200;
         _tracking = _decayed = false;
         _onsetBlock = _peakBlock = 0;
-        _peakHigh = _peakLow = _onsetReference = 0;
+        _peakHigh = _peakLow = _peakBody = _onsetReference = 0;
+        _drop = double.NaN;
         _claps = 0;
         _lastClap = _shortestGap = _longestGap = _quietestClap = _lastTickHigh = 0;
         _previousClap = _lastNoise = _lastTick = _lockedUntil = _blockedLast = double.NegativeInfinity;
@@ -264,6 +329,8 @@ public sealed class ClapDetector
         _lowPass = Biquad.LowPass(rate, Math.Min(7000, 0.45 * rate));
         _highPass = Biquad.HighPass(rate, 60);
         _highBand = Biquad.HighPass(rate, 2000);
+        _bodyHighPass1 = _bodyHighPass2 = Biquad.HighPass(rate, BodyFrom);
+        _bodyLowPass1 = _bodyLowPass2 = Biquad.LowPass(rate, BodyTo);
     }
 
     private static double Decibels(double energy) => 10 * Math.Log10(energy + 1e-20);
@@ -276,7 +343,8 @@ public sealed class ClapDetector
         var energyLow = _sumLow / _samplesInBlock;
         var high = Decibels(energyHigh);
         var low = Decibels(energyLow);
-        _sumHigh = _sumLow = 0;
+        var body = Decibels(_sumBody / _samplesInBlock);
+        _sumHigh = _sumLow = _sumBody = 0;
         _samplesInBlock = 0;
 
         // Digital silence (muted, a dropout, a noise gate, or a very quiet room through a 16-bit
@@ -284,11 +352,11 @@ public sealed class ClapDetector
         // would otherwise sink far below the room and let dry clicks pass for claps.
         var thresholds = _thresholds;
         var silent = energyHigh + energyLow < SilentEnergy;
-        if (!double.IsFinite(high) || !double.IsFinite(low))
+        if (!double.IsFinite(high) || !double.IsFinite(low) || !double.IsFinite(body))
         {
             ResetFilters(); // overflowed: start the filters again, and drop what was being judged
             Interrupt();
-            high = low = -200;
+            high = low = body = -200;
             silent = true;
         }
 
@@ -297,6 +365,7 @@ public sealed class ClapDetector
             // The fade into silence (the filters ringing down) isn't the room either.
             _floorHigh = Math.Max(_floorHigh, _steadyFloorHigh);
             _floorLow = Math.Max(_floorLow, _steadyFloorLow);
+            _floorBody = Math.Max(_floorBody, _steadyFloorBody);
         }
 
         _wasSilent = silent;
@@ -310,18 +379,19 @@ public sealed class ClapDetector
             // Learn the background quickly before judging anything.
             if (!silent)
             {
-                RememberSteadyFloors(high, low);
+                RememberSteadyFloors(high, low, body);
                 _floorHigh = Math.Max(-120, double.IsNaN(_floorHigh) ? high : _floorHigh + 0.2 * (high - _floorHigh));
                 _floorLow = Math.Max(-120, double.IsNaN(_floorLow) ? low : _floorLow + 0.2 * (low - _floorLow));
+                _floorBody = Math.Max(-120, double.IsNaN(_floorBody) ? body : _floorBody + 0.2 * (body - _floorBody));
             }
         }
         else if (_tracking)
         {
-            Track(high, low, thresholds);
+            Track(high, low, body, thresholds);
         }
         else if (!silent)
         {
-            TryStart(high, low, thresholds);
+            TryStart(high, low, body, thresholds);
         }
 
         _high2 = _high1;
@@ -333,24 +403,26 @@ public sealed class ClapDetector
     }
 
     /// <summary>Background levels follow the quiet moments: they fall fast and rise slowly.</summary>
-    private void UpdateFloors(double high, double low)
+    private void UpdateFloors(double high, double low, double body)
     {
-        RememberSteadyFloors(high, low);
+        RememberSteadyFloors(high, low, body);
         _floorHigh = Math.Max(-120, _floorHigh + (high < _floorHigh ? _floorFall : _floorRise) * (high - _floorHigh));
         _floorLow = Math.Max(-120, _floorLow + (low < _floorLow ? _floorFall : _floorRise) * (low - _floorLow));
+        _floorBody = Math.Max(-120, _floorBody + (body < _floorBody ? _floorFall : _floorRise) * (body - _floorBody));
     }
 
     /// <summary>A block close to the background is ordinary room sound: remember the background as it is.</summary>
-    private void RememberSteadyFloors(double high, double low)
+    private void RememberSteadyFloors(double high, double low, double body)
     {
         if (!double.IsNaN(_floorHigh) && Math.Abs(high - _floorHigh) <= 6 && Math.Abs(low - _floorLow) <= 6)
         {
             _steadyFloorHigh = _floorHigh;
             _steadyFloorLow = _floorLow;
+            _steadyFloorBody = _floorBody;
         }
     }
 
-    private void TryStart(double high, double low, Thresholds t)
+    private void TryStart(double high, double low, double body, Thresholds t)
     {
         // Compared with two blocks back, so a clap split across two blocks still counts as a rise.
         var reference = Math.Max(_high2, _floorHigh);
@@ -362,7 +434,9 @@ public sealed class ClapDetector
             _onsetBlock = _peakBlock = _block;
             _peakHigh = high;
             _peakLow = low;
+            _peakBody = body;
             _onsetReference = reference;
+            _drop = double.NaN;
             return;
         }
 
@@ -372,10 +446,10 @@ public sealed class ClapDetector
             Noise(_block * _blockSeconds, high - _floorHigh, low - _floorLow);
         }
 
-        UpdateFloors(high, low);
+        UpdateFloors(high, low, body);
     }
 
-    private void Track(double high, double low, Thresholds t)
+    private void Track(double high, double low, double body, Thresholds t)
     {
         var age = _block - _onsetBlock;
         if (age <= 2)
@@ -387,9 +461,10 @@ public sealed class ClapDetector
             }
 
             _peakLow = Math.Max(_peakLow, low);
+            _peakBody = Math.Max(_peakBody, body);
             if (age == 2 && !(_peakHigh - _floorHigh >= t.AboveFloor && _peakHigh - _onsetReference >= t.Rise && _peakHigh >= t.MinimumLevel))
             {
-                Reject(t); // too weak
+                Reject(t, ClapVerdict.TooQuiet);
             }
 
             return;
@@ -402,6 +477,7 @@ public sealed class ClapDetector
             _peakHigh = high;
             _peakBlock = _block;
             _peakLow = Math.Max(_peakLow, low);
+            _peakBody = Math.Max(_peakBody, body);
             return;
         }
 
@@ -410,23 +486,24 @@ public sealed class ClapDetector
         if (high > _peakHigh + 3 || low > _peakLow + 3
             || (_block - 2 > _peakBlock && high - Math.Max(_high2, _floorHigh) >= Math.Min(t.Rise, 10)))
         {
-            Reject(t);
-            TryStart(high, low, t);
+            Reject(t, ClapVerdict.RoseAgain);
+            TryStart(high, low, body, t);
             return;
         }
 
         var sincePeak = _block - _peakBlock;
         if (sincePeak == Blocks(TailCheckSeconds))
         {
-            if (_peakHigh - high < t.MinDrop)
+            _drop = _peakHigh - high;
+            if (_drop < t.MinDrop)
             {
-                Reject(t); // sustained: speech, music
+                Reject(t, ClapVerdict.Sustained); // speech, music
                 return;
             }
 
-            if (high - _floorHigh < t.MinTail || _peakHigh - high > t.MaxDrop)
+            if (high - _floorHigh < t.MinTail || _drop > t.MaxDrop)
             {
-                Reject(t); // dry, no room tail: a keyboard or mouse click
+                Reject(t, ClapVerdict.NoRoomTail); // a keyboard or mouse click
                 return;
             }
         }
@@ -441,42 +518,50 @@ public sealed class ClapDetector
             }
             else if (sincePeak * _blockSeconds * 1000 > t.DecayWindowMs)
             {
-                Reject(t); // doesn't fade like a clap
+                Reject(t, ClapVerdict.DidntFade);
                 return;
             }
         }
 
         if (_decayed && sincePeak >= Blocks(TailCheckSeconds) && age >= Blocks(HoldSeconds))
         {
-            if (_peakHigh - _peakLow >= t.MinHighOverLow && _peakHigh - _floorLow >= MinOverRoom && !FromSpeakers())
+            if (_peakHigh - _peakLow < t.MinHighOverLow)
+            {
+                Reject(t, ClapVerdict.TooLowPitched); // a knock or a thump
+            }
+            else if (_peakBody - _floorBody < t.MinBody || _peakBody - _peakHigh < t.MinBodyOverHigh)
+            {
+                Reject(t, ClapVerdict.NoBody); // a click, a machine's tick
+            }
+            else if (FromSpeakers())
+            {
+                Reject(t, ClapVerdict.FromSpeakers);
+            }
+            else
             {
                 _tracking = false;
                 Clap(_onsetBlock * _blockSeconds, _peakHigh - _floorHigh);
             }
-            else
-            {
-                Reject(t); // mostly low (a knock or a thump), faint next to the room's own noise, or the speakers'
-            }
         }
     }
 
-    /// <summary>Whether the sound being judged may have come from the PC's own speakers.</summary>
+    /// <summary>Whether the sound being judged may have come from the PC's own speakers (as sharply as it rose).</summary>
     private bool FromSpeakers() =>
-        _speakers is { } speakers && speakers.MayExplain(_onsetBlock * _blockSeconds + _clockOffset);
+        _speakers is { } speakers && speakers.MayExplain(_onsetBlock * _blockSeconds + _clockOffset, _peakHigh - _onsetReference);
 
     /// <summary>
     /// Not a clap. It interrupts claps only if it stood out from the room: the faint ticks and
     /// whirs of a machine, quiet next to the machine's own hum, don't.
     /// </summary>
-    private void Reject(Thresholds t)
+    private void Reject(Thresholds t, ClapVerdict why)
     {
         _tracking = false;
+        Judged(why);
         var time = _onsetBlock * _blockSeconds;
 
         // Anything with a low part (a knock, a thump) always counts; the tick rules in Noise
         // decide about the rest.
-        var stoodOut = (_peakHigh - _floorHigh >= t.AboveFloor && _peakHigh - _floorLow >= MinOverRoom)
-                       || _peakLow - _floorLow >= TickLowRise;
+        var stoodOut = _peakHigh - _floorHigh >= t.AboveFloor || _peakLow - _floorLow >= TickLowRise;
         if (stoodOut)
         {
             Noise(time, _peakHigh - _floorHigh, _peakLow - _floorLow);
@@ -499,10 +584,19 @@ public sealed class ClapDetector
         return MaxCount;
     }
 
+    private void Judged(ClapVerdict verdict) =>
+        SoundJudged?.Invoke(new ClapJudgement(verdict, _peakHigh - _floorHigh, _peakBody - _floorBody, _peakHigh - _peakLow, _drop));
+
     /// <param name="level">The clap's high band peak above the background (dB).</param>
     private void Clap(double time, double level)
     {
         ClapHeard?.Invoke();
+        Judged(CountClap(time, level) ? ClapVerdict.Clap : ClapVerdict.ClapNotCounted);
+    }
+
+    /// <summary>Adds a clap to claps in a row: false if it couldn't start or continue them.</summary>
+    private bool CountClap(double time, double level)
+    {
         if (_claps >= MinCount && time - _lastClap > MaxRhythmRatio * _shortestGap)
         {
             // Too late to keep the rhythm, though the sequence wasn't reported yet: it is over,
@@ -516,7 +610,7 @@ public sealed class ClapDetector
         {
             _lockedUntil = time + MaxGap; // part of a burst that was rejected: wait for quiet
             Blocked(time);
-            return;
+            return false;
         }
 
         if (_claps == 0)
@@ -527,7 +621,7 @@ public sealed class ClapDetector
             {
                 _lockedUntil = time + MaxGap;
                 Blocked(time);
-                return;
+                return false;
             }
 
             _blockedClaps = 0;
@@ -536,14 +630,14 @@ public sealed class ClapDetector
             _shortestGap = double.MaxValue;
             _longestGap = 0;
             _quietestClap = level;
-            return;
+            return true;
         }
 
         var gap = time - _lastClap;
         if (gap < MinGap || gap > MaxGap || _claps >= Largest())
         {
             Cancel(time);
-            return;
+            return false;
         }
 
         _claps++;
@@ -554,7 +648,10 @@ public sealed class ClapDetector
         if (_claps >= 3 && _longestGap > MaxRhythmRatio * _shortestGap)
         {
             Cancel(time); // no steady rhythm
+            return false;
         }
+
+        return true;
     }
 
     /// <summary>A sound that isn't a clap, <paramref name="high"/> and <paramref name="low"/> dB above the background at its peak.</summary>
@@ -653,6 +750,8 @@ public sealed class ClapDetector
     /// <param name="Rise">High band peak above the level two blocks before.</param>
     /// <param name="MinimumLevel">High band peak level (re full scale).</param>
     /// <param name="MinHighOverLow">High band peak minus low band peak (cupped claps reach -17).</param>
+    /// <param name="MinBody">Body band (500 Hz–1.2 kHz) peak above its background (less: a click or a tick, not a clap).</param>
+    /// <param name="MinBodyOverHigh">Body band peak minus high band peak (claps reach -14; clicks and ticks, -22 and less).</param>
     /// <param name="MinDrop">Least drop 40 ms after the peak (less: sustained).</param>
     /// <param name="MinTail">Least level above the background 40 ms after the peak (less: dry).</param>
     /// <param name="MaxDrop">Most drop 40 ms after the peak (more: dry).</param>
@@ -664,6 +763,8 @@ public sealed class ClapDetector
         double Rise,
         double MinimumLevel,
         double MinHighOverLow,
+        double MinBody,
+        double MinBodyOverHigh,
         double MinDrop,
         double MinTail,
         double MaxDrop,
@@ -671,9 +772,9 @@ public sealed class ClapDetector
         double DecayLow,
         double DecayWindowMs)
     {
-        private static readonly Thresholds LowSensitivity = new(28, 18, -45, -21, 4, 12, 24, 12, 10, 120);
-        private static readonly Thresholds MediumSensitivity = new(21, 14, -55, -22, 3, 10, 24, 10, 8, 150);
-        private static readonly Thresholds HighSensitivity = new(15, 10, -65, -24, 2, 3, 24, 8, 6, 200);
+        private static readonly Thresholds LowSensitivity = new(28, 18, -55, -21, 9, -16, 4, 12, 24, 12, 10, 120);
+        private static readonly Thresholds MediumSensitivity = new(21, 14, -62, -22, 7, -18, 3, 10, 24, 10, 8, 150);
+        private static readonly Thresholds HighSensitivity = new(15, 10, -70, -24, 6, -20, 2, 3, 24, 8, 6, 200);
 
         public static Thresholds For(ClapSensitivity sensitivity) => sensitivity switch
         {
