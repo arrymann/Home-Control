@@ -99,7 +99,7 @@
                     <toolkit:SettingsCard ContentAlignment="Left">
                         <TextBlock
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="No sound is kept. It is analysed as it arrives, 10 ms at a time, and reduced to two loudness figures; the sound itself is never recorded, saved, logged or sent anywhere. The microphone is open only while this is on and an enabled automation has a Claps trigger (Automations page)."
+                            Text="No sound is kept. It is analysed as it arrives, 10 ms at a time, and reduced to two loudness figures; the sound itself is never recorded, saved, logged or sent anywhere. The microphone is open only while this is on and an enabled automation has a Claps trigger (Automations page). What the PC plays on its speakers (not headphones) is followed the same way, so claps in videos, games or music don't count."
                             TextWrapping="Wrap" />
                     </toolkit:SettingsCard>
                 </toolkit:SettingsExpander.Items>

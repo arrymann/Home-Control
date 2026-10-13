@@ -56,6 +56,8 @@ internal sealed class MicrophoneCapture : IDisposable
 
     // Read on the capture thread; set before a recorder starts (or swapped atomically).
     private volatile ClapDetector? _detector;
+    private volatile SpeakerTaps? _speakerTaps; // read on the capture thread before each packet
+    private PacketClock? _micClock;             // capture thread only (set before the recorder starts)
     private volatile int _sensitivity = (int)ClapSensitivity.Medium;
     private volatile int[] _counts = [];
     private bool _isFloat;
@@ -236,7 +238,7 @@ internal sealed class MicrophoneCapture : IDisposable
             _recording = StartWithFallbacks(_device, _generation);
             _startedAt = Environment.TickCount64;
             Log.Info($"Listening for claps with “{_device.FriendlyName}”");
-            Report(MicrophoneState.Listening, _device.FriendlyName);
+            ReportListening();
         }
         catch (Exception ex)
         {
@@ -268,6 +270,18 @@ internal sealed class MicrophoneCapture : IDisposable
         _notifications.DeviceStateChanged += (_, _) => Post(() => OnDevicesChanged(null, defaultChanged: false));
         _notifications.DeviceAdded += (_, _) => Post(() => OnDevicesChanged(null, defaultChanged: false));
         _notifications.DeviceRemoved += (_, _) => Post(() => OnDevicesChanged(null, defaultChanged: false));
+
+        // Speakers plugged in, unplugged, enabled or disabled: follow what each of them plays.
+        // (Every speaker device is followed, not only the default one: apps can play on any.)
+        _notifications.DeviceStateChanged += (_, _) => Post(ReopenSpeakers);
+        _notifications.DeviceAdded += (_, _) => Post(ReopenSpeakers);
+        _notifications.DeviceRemoved += (_, _) => Post(ReopenSpeakers);
+    }
+
+    private Task ReopenSpeakers()
+    {
+        _speakerTaps?.Reopen();
+        return Task.CompletedTask;
     }
 
     private Task OnDevicesChanged(string? newDefaultId, bool defaultChanged)
@@ -366,9 +380,28 @@ internal sealed class MicrophoneCapture : IDisposable
                 throw new NotSupportedException($"The microphone's format ({waveFormat.Encoding}, {waveFormat.BitsPerSample}-bit) isn't supported.");
             }
 
-            var detector = new ClapDetector(waveFormat.SampleRate, (ClapSensitivity)_sensitivity) { Counts = _counts };
+            // What the speakers play, so their claps aren't taken for the user's.
+            var speakers = new SpeakerTaps();
+            speakers.UnseenChanged += () => Post(() =>
+            {
+                if (_wanted && _recording is not null && _speakerTaps == speakers)
+                {
+                    ReportListening();
+                }
+
+                return Task.CompletedTask;
+            });
+            _speakerTaps = speakers;
+            speakers.Reopen();
+            if (speakers.Description.Length > 0)
+            {
+                Log.Info($"Ignoring claps played on: {speakers.Description}");
+            }
+
+            var detector = new ClapDetector(waveFormat.SampleRate, (ClapSensitivity)_sensitivity) { Counts = _counts, Speakers = speakers.Sounds };
             detector.PatternDetected += _patternDetected;
             detector.ClapHeard += _clapHeard;
+            _micClock = new PacketClock(waveFormat.SampleRate);
             _detector = detector;
             _reportedError = false;
 
@@ -489,18 +522,24 @@ internal sealed class MicrophoneCapture : IDisposable
 
         try
         {
+            // First everything the speakers have played up to now, so that a clap of theirs is
+            // known before the microphone's echo of it is judged.
+            _speakerTaps?.Drain();
+
             if ((flags & AudioClientBufferFlags.DataDiscontinuity) != 0)
             {
                 detector.Interrupt(); // a glitch: don't let it complete or break a pattern
             }
 
+            var frames = buffer.Length / (_channels * (_isFloat ? 4 : 2));
+            var time = _micClock!.TimeOf(devicePosition, qpcPosition, flags, frames);
             if (_isFloat && _channels == 1)
             {
-                detector.Process(MemoryMarshal.Cast<byte, float>(buffer));
+                detector.Process(MemoryMarshal.Cast<byte, float>(buffer), time);
                 return;
             }
 
-            MixDown(buffer, detector);
+            MixDown(buffer, detector, time);
         }
         catch (Exception ex)
         {
@@ -513,7 +552,7 @@ internal sealed class MicrophoneCapture : IDisposable
     }
 
     /// <summary>Averages the channels into a small stack buffer, a piece at a time, and wipes it.</summary>
-    private void MixDown(ReadOnlySpan<byte> buffer, ClapDetector detector)
+    private void MixDown(ReadOnlySpan<byte> buffer, ClapDetector detector, double time)
     {
         Span<float> mono = stackalloc float[256];
         try
@@ -537,7 +576,7 @@ internal sealed class MicrophoneCapture : IDisposable
                     mono[i] = sum / channels;
                 }
 
-                detector.Process(mono[..count]);
+                detector.Process(mono[..count], time + start / (double)detector.SampleRate);
             }
         }
         finally
@@ -662,6 +701,19 @@ internal sealed class MicrophoneCapture : IDisposable
             detector.ClapHeard -= _clapHeard;
             detector.Reset();
         }
+
+        // Waits for a Drain in progress (a capture thread left closing in the background may still call it).
+        _speakerTaps?.Dispose();
+        _speakerTaps = null;
+    }
+
+    /// <summary>Listening, with the microphone's name (and why claps don't count, if they don't).</summary>
+    private void ReportListening()
+    {
+        var name = _device?.FriendlyName ?? "the microphone";
+        Report(MicrophoneState.Listening, _speakerTaps?.Sounds.PlayingUnseen == true
+            ? $"{name}, but claps don't count while another app has the speakers to itself"
+            : name);
     }
 
     private void Report(MicrophoneState state, string? detail)

@@ -8,15 +8,19 @@ internal sealed class ClapSignals
 {
     private readonly ClapSignalRandom _random;
 
-    public ClapSignals(int rate, double seconds, ulong seed = 42)
+    /// <param name="room">Start from a quiet room's noise; false: from digital silence (what an app plays).</param>
+    public ClapSignals(int rate, double seconds, ulong seed = 42, bool room = true)
     {
         Rate = rate;
         Samples = new float[(int)(rate * seconds)];
         _random = new ClapSignalRandom(seed);
 
-        // A quiet room: hiss plus a low hum like a fan.
-        AddNoise(-70);
-        AddNoise(-60, lowPassHz: 150);
+        if (room)
+        {
+            // A quiet room: hiss plus a low hum like a fan.
+            AddNoise(-70);
+            AddNoise(-60, lowPassHz: 150);
+        }
     }
 
     public int Rate { get; }
@@ -53,6 +57,26 @@ internal sealed class ClapSignals
         Burst(time, 8 * Math.Max(direct, reverbDecay),
             t => Math.Min(1, t / 0.0003) * (Math.Exp(-t / direct) + reverb * Math.Exp(-t / reverbDecay)),
             lowHz, highHz, Amplitude(peakDb));
+        return this;
+    }
+
+    /// <summary>
+    /// What the PC played (<paramref name="played"/>, at the same rate), heard through its speakers
+    /// <paramref name="delay"/> seconds later and <paramref name="gainDb"/> louder or quieter, a
+    /// little duller (the room absorbs the highest sounds first).
+    /// </summary>
+    public ClapSignals AddPlayed(ClapSignals played, double delay, double gainDb = -6)
+    {
+        var shift = (int)Math.Round(delay * Rate);
+        var gain = Amplitude(gainDb);
+        var a = Math.Exp(-2 * Math.PI * 9000 / Rate);
+        double state = 0;
+        for (var i = Math.Max(0, shift); i < Samples.Length && i - shift < played.Samples.Length; i++)
+        {
+            state = a * state + (1 - a) * played.Samples[i - shift];
+            Samples[i] += (float)(gain * state);
+        }
+
         return this;
     }
 

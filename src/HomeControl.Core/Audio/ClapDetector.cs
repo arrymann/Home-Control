@@ -39,6 +39,10 @@ public enum ClapSensitivity
 /// sounds; voices, music, knocks and anything about as loud as the claps do.
 /// </para>
 /// <para>
+/// A clap that starts when a sound from the PC's own speakers may be reaching the microphone
+/// (see <see cref="Speakers"/>) is taken for theirs, not the user's.
+/// </para>
+/// <para>
 /// Times come from the number of samples processed, not the clock, so the result depends only
 /// on the sound. Call <see cref="Process"/> from one thread at a time; <see cref="Counts"/> and
 /// <see cref="Sensitivity"/> may be changed from any thread. The events are raised on the
@@ -71,6 +75,7 @@ public sealed class ClapDetector
     private readonly double _floorFall;
     private volatile Thresholds _thresholds;
     private volatile int _counts;
+    private volatile SpeakerSounds? _speakers;
     private ClapSensitivity _sensitivity;
 
     // Front end: band filters and this block's running energy.
@@ -82,6 +87,9 @@ public sealed class ClapDetector
     private int _samplesInBlock;
     private long _block;
     private long _learnUntil;
+
+    // The shared clock (seconds) at sample 0, from the last Process call that gave one.
+    private double _clockOffset;
 
     // Levels in dB: background noise per band (and as it was in the last steady block, before
     // any fade into silence), and the two blocks before this one.
@@ -174,6 +182,28 @@ public sealed class ClapDetector
         }
     }
 
+    /// <summary>
+    /// What the PC's own speakers play, as times on the clock given to
+    /// <see cref="Process(ReadOnlySpan{float}, double)"/>: a clap that starts while a sound of
+    /// theirs may be reaching the microphone is ignored (it counts as another sound). Null: none.
+    /// </summary>
+    public SpeakerSounds? Speakers
+    {
+        get => _speakers;
+        set => _speakers = value;
+    }
+
+    /// <summary>Analyses the next samples (mono, -1 to 1). Nothing is kept of them.</summary>
+    /// <param name="startTime">
+    /// When the first of them was recorded, in seconds on the clock that <see cref="Speakers"/>
+    /// uses (e.g. the capture packet's QPC position / 10^7).
+    /// </param>
+    public void Process(ReadOnlySpan<float> samples, double startTime)
+    {
+        _clockOffset = startTime - (double)(_block * _blockLength + _samplesInBlock) / SampleRate;
+        Process(samples);
+    }
+
     /// <summary>Analyses the next samples (mono, -1 to 1). Nothing is kept of them.</summary>
     public void Process(ReadOnlySpan<float> samples)
     {
@@ -209,6 +239,7 @@ public sealed class ClapDetector
         _sumHigh = _sumLow = 0;
         _samplesInBlock = 0;
         _block = 0;
+        _clockOffset = 0;
         _learnUntil = Blocks(WarmUpSeconds);
         _floorHigh = _floorLow = _steadyFloorHigh = _steadyFloorLow = double.NaN;
         _wasSilent = false;
@@ -411,17 +442,21 @@ public sealed class ClapDetector
 
         if (_decayed && sincePeak >= Blocks(TailCheckSeconds) && age >= Blocks(HoldSeconds))
         {
-            if (_peakHigh - _peakLow >= t.MinHighOverLow && _peakHigh - _floorLow >= MinOverRoom)
+            if (_peakHigh - _peakLow >= t.MinHighOverLow && _peakHigh - _floorLow >= MinOverRoom && !FromSpeakers())
             {
                 _tracking = false;
                 Clap(_onsetBlock * _blockSeconds, _peakHigh - _floorHigh);
             }
             else
             {
-                Reject(t); // mostly low (a knock or a thump), or faint next to the room's own noise
+                Reject(t); // mostly low (a knock or a thump), faint next to the room's own noise, or the speakers'
             }
         }
     }
+
+    /// <summary>Whether the sound being judged may have come from the PC's own speakers.</summary>
+    private bool FromSpeakers() =>
+        _speakers is { } speakers && speakers.MayExplain(_onsetBlock * _blockSeconds + _clockOffset);
 
     /// <summary>
     /// Not a clap. It interrupts claps only if it stood out from the room: the faint ticks and
@@ -601,7 +636,7 @@ public sealed class ClapDetector
     }
 
     /// <summary>A second-order Butterworth filter (RBJ cookbook, transposed direct form II).</summary>
-    private struct Biquad
+    internal struct Biquad
     {
         private double _b0, _b1, _b2, _a1, _a2;
         private double _z1, _z2;

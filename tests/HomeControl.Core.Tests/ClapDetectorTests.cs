@@ -570,7 +570,9 @@ public class ClapDetectorTests
     public void Has_nowhere_to_keep_sound()
     {
         // Only single numbers: no arrays, lists, buffers, memory or streams that could hold samples.
-        var types = typeof(ClapDetector).GetNestedTypes(BindingFlags.NonPublic | BindingFlags.Public).Append(typeof(ClapDetector));
+        // The same goes for what follows the speakers (their loopback stream is sound too).
+        Type[] listening = [typeof(ClapDetector), typeof(SpeakerSounds), typeof(SpeakerStream)];
+        var types = listening.SelectMany(t => t.GetNestedTypes(BindingFlags.NonPublic | BindingFlags.Public).Append(t)).ToList();
         foreach (var type in types)
         {
             foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public))
