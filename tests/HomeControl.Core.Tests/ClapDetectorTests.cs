@@ -289,6 +289,87 @@ public class ClapDetectorTests
         });
     }
 
+    [Fact]
+    public void Talking_still_counts_next_to_a_3d_printer()
+    {
+        // The printer's hum hides voices in the high band; at a normal level they still count
+        // as other sounds, right before the claps and all through them.
+        ForEachRate(rate =>
+        {
+            foreach (var sensitivity in AllSensitivities)
+            {
+                var afterTalk = new ClapSignals(rate, 4).AddPrinterRoom().AddSpeech(0.8, 1.6, -20).AddClaps(1.8, 0.3, 2);
+                var underTalk = new ClapSignals(rate, 4).AddPrinterRoom().AddSpeech(0.8, 3.5, -25).AddClaps(1.9, 0.3, 2, -15);
+
+                Assert.Empty(Listen(afterTalk, [2], sensitivity).Patterns);
+                Assert.Empty(Listen(underTalk, [2], sensitivity).Patterns);
+            }
+        });
+    }
+
+    [Fact]
+    public void Trying_again_after_a_spoiled_pair_works()
+    {
+        // The second clap of the first try was too soft; the user tries again at once, and again.
+        ForEachRate(rate =>
+        {
+            foreach (var sensitivity in AllSensitivities)
+            {
+                var signal = new ClapSignals(rate, 5).AddClap(1.0).AddClap(1.27, -75)
+                    .AddClaps(1.62, 0.27, 2).AddClaps(2.45, 0.27, 2).AddClaps(3.3, 0.27, 2);
+
+                Assert.Equal([2, 2], Listen(signal, [2], sensitivity).Patterns.Select(p => p.Count));
+            }
+        });
+    }
+
+    [Theory]
+    [InlineData(0.45)]
+    [InlineData(0.5)]
+    public void A_pair_a_little_after_a_pair_is_another_pair(double pause)
+    {
+        // Just too late to keep the rhythm of the first pair: that pair is over, and this one counts too.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 4).AddClaps(1.0, 0.25, 2).AddClaps(1.25 + pause, 0.25, 2);
+
+            Assert.Equal([2, 2], Listen(signal, [2, 3, 4]).Patterns.Select(p => p.Count));
+        });
+    }
+
+    /// <summary>A room with a steady machine hum (pure tones): its low band barely moves, so a high tick is just that.</summary>
+    private static ClapSignals HummingRoom(int rate, double seconds) =>
+        new ClapSignals(rate, seconds).AddTone(100, -30).AddTone(200, -36);
+
+    [Theory]
+    [InlineData(-12, true)] // a tick that stands out from the room, but 15 dB below the claps, doesn't matter
+    [InlineData(-4, false)] // one about as loud as the claps does
+    public void Ticks_count_only_when_about_as_loud_as_the_claps(double tickDb, bool heard)
+    {
+        // Just before the claps, and while the sequence is still open.
+        ForEachRate(rate =>
+        {
+            var before = HummingRoom(rate, 3).AddHighTick(0.8, tickDb).AddClaps(1.0, 0.3, 2, -10);
+            var during = HummingRoom(rate, 3).AddClaps(1.0, 0.3, 2, -10).AddHighTick(1.55, tickDb);
+            var expected = heard ? new[] { 2 } : [];
+
+            Assert.Equal(expected, Listen(before, [2, 3]).Patterns.Select(p => p.Count));
+            Assert.Equal(expected, Listen(during, [2, 3]).Patterns.Select(p => p.Count));
+        });
+    }
+
+    [Fact]
+    public void A_tick_is_measured_against_the_quietest_clap()
+    {
+        // The second clap is 10 dB quieter: a tick 15 dB below the first clap but near the second counts.
+        ForEachRate(rate =>
+        {
+            var signal = HummingRoom(rate, 3).AddClap(1.0, -10).AddClap(1.3, -20).AddHighTick(1.55, -12);
+
+            Assert.Empty(Listen(signal, [2, 3]).Patterns);
+        });
+    }
+
     // ---------------------------------------------------------------- next to a 3D printer
 
     [Fact]

@@ -43,11 +43,12 @@ internal sealed class SpeakerTaps : IDisposable
     private readonly MMDeviceEnumerator _enumerator = new();
     private readonly Timer _retry;
     private Tap[] _taps = [];
+    private bool _retryArmed; // under _gate: a failed stream already asked for a Reopen
     private volatile bool _disposed;
 
     public SpeakerTaps()
     {
-        _retry = new Timer(_ => Reopen(), null, Timeout.Infinite, Timeout.Infinite);
+        _retry = new Timer(_ => Retry(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
     /// <summary>What the detector checks claps against (<see cref="ClapDetector.Speakers"/>).</summary>
@@ -80,51 +81,18 @@ internal sealed class SpeakerTaps : IDisposable
             var taps = new List<Tap>();
             var notes = new List<string>();
             var inUse = false;
-            IEnumerable<MMDevice> devices = [];
             try
             {
-                devices = _enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+                using var devices = _enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+                for (var i = 0; i < devices.Count; i++)
+                {
+                    Open(devices[i], taps, notes, ref inUse);
+                }
             }
-            catch (COMException ex)
+            catch (Exception ex)
             {
-                Log.Info($"Listing speakers: 0x{ex.HResult:X8}"); // e.g. the audio service is restarting
-            }
-
-            foreach (var device in devices)
-            {
-                var keep = false;
-                try
-                {
-                    var (audible, maxDelay) = Classify(device);
-                    if (!audible)
-                    {
-                        continue;
-                    }
-
-                    taps.Add(new Tap(device, Sounds, maxDelay));
-                    keep = true;
-                    notes.Add(device.FriendlyName);
-                }
-                catch (COMException ex) when (ex.HResult == AudioClientErrorCode.DeviceInUse)
-                {
-                    // Another app plays on it in exclusive mode, out of the engine's (and our) sight
-                    // (documented for IAudioClient::Initialize; what an already open loopback stream
-                    // sees then is UNVERIFIED: an error, or simply no packets).
-                    inUse = true;
-                    notes.Add($"{device.FriendlyName} (used exclusively by another app)");
-                }
-                catch (Exception ex)
-                {
-                    Log.Info($"Following “{device.FriendlyName}”: {ex.GetType().Name} 0x{ex.HResult:X8}");
-                    notes.Add($"{device.FriendlyName} (can't be followed)");
-                }
-                finally
-                {
-                    if (!keep)
-                    {
-                        device.Dispose();
-                    }
-                }
+                // E.g. the audio service is restarting: the streams opened so far are kept.
+                Log.Info($"Listing speakers: {ex.GetType().Name} 0x{ex.HResult:X8}");
             }
 
             Tap[] old;
@@ -132,6 +100,7 @@ internal sealed class SpeakerTaps : IDisposable
             {
                 old = _taps;
                 _taps = taps.ToArray();
+                _retryArmed = false;
                 if (_disposed)
                 {
                     (old, _taps) = (_taps, []);
@@ -140,6 +109,12 @@ internal sealed class SpeakerTaps : IDisposable
                 // Fail closed: an exclusive-mode app may be playing anything.
                 SetUnseen(inUse && !_disposed);
                 Description = string.Join(", ", notes);
+
+                // Under the lock, so a stream that fails right after the swap still gets its retry.
+                if (!_disposed)
+                {
+                    _retry.Change(inUse ? RetryMilliseconds : Timeout.Infinite, Timeout.Infinite);
+                }
             }
 
             // No Drain can be reading these any more: it only reads the array under the lock.
@@ -147,11 +122,70 @@ internal sealed class SpeakerTaps : IDisposable
             {
                 tap.Dispose();
             }
+        }
+    }
 
-            if (!_disposed)
+    /// <summary>Opens one device's stream into <paramref name="taps"/>, or notes why not; disposes the device unless kept.</summary>
+    private void Open(MMDevice device, List<Tap> taps, List<string> notes, ref bool inUse)
+    {
+        var name = NameOf(device);
+        var keep = false;
+        try
+        {
+            var (audible, maxDelay) = Classify(device);
+            if (!audible)
             {
-                _retry.Change(inUse ? RetryMilliseconds : Timeout.Infinite, Timeout.Infinite);
+                return;
             }
+
+            taps.Add(new Tap(device, Sounds, maxDelay));
+            keep = true;
+            notes.Add(name);
+        }
+        catch (COMException ex) when (ex.HResult == AudioClientErrorCode.DeviceInUse)
+        {
+            // Another app plays on it in exclusive mode, out of the engine's (and our) sight
+            // (documented for IAudioClient::Initialize; what an already open loopback stream
+            // sees then is UNVERIFIED: an error, or simply no packets).
+            inUse = true;
+            notes.Add($"{name} (used exclusively by another app)");
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"Following “{name}”: {ex.GetType().Name} 0x{ex.HResult:X8}");
+            notes.Add($"{name} (can't be followed)");
+        }
+        finally
+        {
+            if (!keep)
+            {
+                device.Dispose();
+            }
+        }
+    }
+
+    private static string NameOf(MMDevice device)
+    {
+        try
+        {
+            return device.FriendlyName;
+        }
+        catch (COMException)
+        {
+            return "a speaker"; // unplugged while being looked at
+        }
+    }
+
+    /// <summary>The retry timer (a thread-pool thread): nothing may escape it.</summary>
+    private void Retry()
+    {
+        try
+        {
+            Reopen();
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"Following the speakers again: {ex.GetType().Name} 0x{ex.HResult:X8}");
         }
     }
 
@@ -169,9 +203,11 @@ internal sealed class SpeakerTaps : IDisposable
                 failed |= !tap.Drain();
             }
 
-            if (failed && !_disposed)
+            if (failed && !_retryArmed && !_disposed)
             {
-                // A device went away or was taken exclusively: no claps until it's looked at again (off this thread).
+                // A device went away or was taken exclusively: no claps until it's looked at again (off
+                // this thread, once: the failed stream keeps failing until Reopen swaps it out).
+                _retryArmed = true;
                 SetUnseen(true);
                 _retry.Change(500, Timeout.Infinite);
             }
@@ -280,6 +316,7 @@ internal sealed class SpeakerTaps : IDisposable
         private readonly int _channels;
         private readonly int _blockAlign;
         private volatile bool _silenced;
+        private bool _failed;
 
         public Tap(MMDevice device, SpeakerSounds sounds, double maxDelay)
         {
@@ -331,6 +368,11 @@ internal sealed class SpeakerTaps : IDisposable
         /// <summary>Reads every packet waiting. False: the stream failed (device gone, or taken exclusively).</summary>
         public bool Drain()
         {
+            if (_failed)
+            {
+                return false;
+            }
+
             try
             {
                 while (_capture.GetNextPacketSize() > 0)
@@ -359,7 +401,8 @@ internal sealed class SpeakerTaps : IDisposable
             }
             catch (COMException)
             {
-                return false; // AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_DEVICE_IN_USE, ...
+                _failed = true; // AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_DEVICE_IN_USE, ...: for good
+                return false;
             }
         }
 

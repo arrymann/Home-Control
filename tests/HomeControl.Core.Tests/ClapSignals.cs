@@ -163,6 +163,13 @@ internal sealed class ClapSignals
         return this;
     }
 
+    /// <summary>A tiny, very high tick (above 4 kHz, no low part at all), e.g. a machine's relay or a fan's rattle.</summary>
+    public ClapSignals AddHighTick(double time, double peakDb)
+    {
+        Burst(time, 0.004, t => Math.Exp(-t / 0.0007), 4000, 7000, Amplitude(peakDb));
+        return this;
+    }
+
     public ClapSignals AddTyping(double from, double to, double peakDb)
     {
         for (var t = from; t < to; t += 0.09 + 0.16 * _random.Uniform())

@@ -34,9 +34,11 @@ public enum ClapSensitivity
 /// sequence starts only after 0.8 s without claps (or right after a finished sequence, so a
 /// pattern can be repeated) and 0.3 s without other sounds, any other sound that stands out
 /// during it cancels it, and it is reported once it is clearly over, so three claps never also
-/// count as two. Sounds that don't stand out from the room, and faint high ticks (the low band
-/// hardly rises and the high band stays 10 dB or more below the claps), don't count as other
-/// sounds; voices, music, knocks and anything about as loud as the claps do.
+/// count as two (a clap too late for the rhythm ends the sequence and may start the next). A try
+/// that was blocked but was a whole pair lets the next try follow straight away. Sounds that
+/// don't stand out from the room, and faint high ticks (the low band hardly rises and the high
+/// band stays 10 dB or more below the claps), don't count as other sounds; voices, music, knocks
+/// and anything about as loud as the claps do.
 /// </para>
 /// <para>
 /// A clap that starts when a sound from the PC's own speakers may be reaching the microphone
@@ -68,6 +70,7 @@ public sealed class ClapDetector
     private const double MinOverRoom = -5;     // dB: high band peak against the room's low-band noise
     private const double TickLowRise = 6;     // dB: a sound whose low band rises less than this is a high tick ...
     private const double TickBelowClaps = 10; // dB: ... and a tick this far below the claps doesn't count
+    private const double BlockedQuiet = 0.45; // s: a blocked try is over after this long without claps
 
     private readonly int _blockLength;
     private readonly double _blockSeconds;
@@ -123,6 +126,8 @@ public sealed class ClapDetector
     private double _lastTick;
     private double _lastTickHigh;
     private double _lockedUntil;
+    private int _blockedClaps;
+    private double _blockedLast;
 
     public ClapDetector(int sampleRate, ClapSensitivity sensitivity = ClapSensitivity.Medium)
     {
@@ -249,7 +254,8 @@ public sealed class ClapDetector
         _peakHigh = _peakLow = _onsetReference = 0;
         _claps = 0;
         _lastClap = _shortestGap = _longestGap = _quietestClap = _lastTickHigh = 0;
-        _previousClap = _lastNoise = _lastTick = _lockedUntil = double.NegativeInfinity;
+        _previousClap = _lastNoise = _lastTick = _lockedUntil = _blockedLast = double.NegativeInfinity;
+        _blockedClaps = 0;
     }
 
     private void ResetFilters()
@@ -465,11 +471,15 @@ public sealed class ClapDetector
     private void Reject(Thresholds t)
     {
         _tracking = false;
+        var time = _onsetBlock * _blockSeconds;
+
+        // Anything with a low part (a knock, a thump) always counts; the tick rules in Noise
+        // decide about the rest.
         var stoodOut = (_peakHigh - _floorHigh >= t.AboveFloor && _peakHigh - _floorLow >= MinOverRoom)
-                       || _peakLow - _floorLow >= t.AboveFloor;
+                       || _peakLow - _floorLow >= TickLowRise;
         if (stoodOut)
         {
-            Noise(_onsetBlock * _blockSeconds, _peakHigh - _floorHigh, _peakLow - _floorLow);
+            Noise(time, _peakHigh - _floorHigh, _peakLow - _floorLow);
         }
     }
 
@@ -493,11 +503,19 @@ public sealed class ClapDetector
     private void Clap(double time, double level)
     {
         ClapHeard?.Invoke();
+        if (_claps >= MinCount && time - _lastClap > MaxRhythmRatio * _shortestGap)
+        {
+            // Too late to keep the rhythm, though the sequence wasn't reported yet: it is over,
+            // and this clap may start the next one (two pairs a little apart are two pairs).
+            Finish(time);
+        }
+
         var previous = _previousClap;
         _previousClap = time;
         if (time < _lockedUntil)
         {
             _lockedUntil = time + MaxGap; // part of a burst that was rejected: wait for quiet
+            Blocked(time);
             return;
         }
 
@@ -508,9 +526,11 @@ public sealed class ClapDetector
             if (noisy || time - previous < ClapGuard)
             {
                 _lockedUntil = time + MaxGap;
+                Blocked(time);
                 return;
             }
 
+            _blockedClaps = 0;
             _claps = 1;
             _lastClap = time;
             _shortestGap = double.MaxValue;
@@ -564,11 +584,50 @@ public sealed class ClapDetector
         _lockedUntil = time + MaxGap;
     }
 
+    /// <summary>A clap that couldn't start or join a sequence: remember the shape of that try.</summary>
+    private void Blocked(double time)
+    {
+        var gap = time - _blockedLast;
+        _blockedClaps = gap >= MinGap && gap <= MaxGap ? _blockedClaps + 1 : 1;
+        _blockedLast = time;
+    }
+
+    /// <summary>The sequence is over: report it (if that count is wanted) and let the next one follow straight away.</summary>
+    private void Finish(double now)
+    {
+        var claps = _claps;
+        _claps = 0;
+        _lockedUntil = now;
+        if (claps >= MinCount)
+        {
+            _previousClap = double.NegativeInfinity;
+        }
+
+        if ((_counts & (1 << claps)) != 0)
+        {
+            PatternDetected?.Invoke(claps);
+        }
+    }
+
     /// <summary>After each block: report the sequence once no further clap can belong to it.</summary>
     private void Advance(double now)
     {
         if (_claps == 0)
         {
+            if (_blockedClaps > 0 && !_tracking && now - _blockedLast > BlockedQuiet)
+            {
+                if (_blockedClaps == 2)
+                {
+                    // A try that the quiet rules blocked but that was a whole pair (one clap of
+                    // the try before was lost, say): the user is trying again, so the next try
+                    // may follow straight away.
+                    _previousClap = double.NegativeInfinity;
+                    _lockedUntil = now;
+                }
+
+                _blockedClaps = 0;
+            }
+
             return;
         }
 
@@ -585,18 +644,7 @@ public sealed class ClapDetector
 
         if (now - _lastClap > wait)
         {
-            var claps = _claps;
-            _claps = 0;
-            _lockedUntil = now;
-            if (claps >= MinCount)
-            {
-                _previousClap = double.NegativeInfinity; // it's over: the next sequence may follow straight away
-            }
-
-            if ((_counts & (1 << claps)) != 0)
-            {
-                PatternDetected?.Invoke(claps);
-            }
+            Finish(now);
         }
     }
 
