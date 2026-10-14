@@ -338,6 +338,57 @@ public class SpeakerSoundsTests
     }
 
     [Fact]
+    public void A_window_still_needed_is_never_lost()
+    {
+        // A video's clap (rising 40 dB) amid sounds of all kinds of sharpness, every 40 ms, played
+        // over Bluetooth: its window must still be there when the microphone's verdict comes.
+        var sounds = new SpeakerSounds();
+        double[] rises = [6, 14, 22, 30, 10, 18, 26];
+        var k = 0;
+        for (var t = -2.0; t < 0; t += 0.04)
+        {
+            sounds.Add(t - 0.03, t + SpeakerStream.BluetoothMaxDelay, rises[k++ % rises.Length]);
+        }
+
+        sounds.Add(-0.03, SpeakerStream.BluetoothMaxDelay, 40);
+        for (var t = 0.04; t < 0.6; t += 0.04)
+        {
+            sounds.Add(t - 0.03, t + SpeakerStream.BluetoothMaxDelay, rises[k++ % rises.Length]);
+        }
+
+        Assert.True(sounds.MayExplain(0.45, rise: 40));
+    }
+
+    [Fact]
+    public void A_processed_microphone_gets_a_wider_margin()
+    {
+        // Noise suppression took away the background the speakers' clap rose from: at the
+        // microphone it rises 12 dB more sharply than it was played.
+        var sounds = new SpeakerSounds();
+        sounds.Add(1.0, 1.2, 20);
+
+        Assert.False(sounds.MayExplain(1.1, rise: 32));
+        sounds.RiseMargin = SpeakerSounds.ProcessedRiseMargin;
+        Assert.True(sounds.MayExplain(1.1, rise: 32));
+    }
+
+    [Fact]
+    public void A_sound_from_one_speaker_keeps_its_sharpness()
+    {
+        // A clap panned to the left speaker over music on both: followed per channel, the left
+        // channel's stream sees the clap rise as sharply as it was played.
+        var sounds = new SpeakerSounds();
+        var left = new SpeakerStream(sounds, 48000);
+        var right = new SpeakerStream(sounds, 48000);
+        var music = new ClapSignals(48000, 3, seed: 11, room: false).AddNoise(-30);
+        var withClap = new ClapSignals(48000, 3, seed: 11, room: false).AddNoise(-30).AddClap(2.0, -12);
+        left.Process(withClap.Samples, 40.0);
+        right.Process(music.Samples, 40.0);
+
+        Assert.True(sounds.MayExplain(42.05, rise: 20));
+    }
+
+    [Fact]
     public void Allocates_nothing_while_listening()
     {
         var played = VideoClaps(48000, seconds: 5, at: 3.0);

@@ -27,7 +27,8 @@ internal enum ClapListenerState
 /// <summary>
 /// Listens for claps while it is wanted: clap listening is on, an enabled automation has a Claps
 /// trigger, and the PC isn't asleep, locked (if the user asked) or used over Remote Desktop.
-/// Heard patterns go to the automations. Only the number of claps leaves the microphone code.
+/// Heard patterns go to the automations. Only clap counts, and a few loudness figures about
+/// each sound the detector judged (for "What it hears"), leave the microphone code; no sound.
 /// All members are used on the UI thread.
 /// </summary>
 internal sealed class ClapListener : IDisposable
@@ -75,7 +76,7 @@ internal sealed class ClapListener : IDisposable
     /// <summary>
     /// The last sounds the detector judged (newest first), one line each: when, what it made of
     /// it and a few loudness figures, e.g. "21:04:05  clap  ·  high +45 dB, body +30 dB, …". Only
-    /// in memory, cleared when listening stops; no sound.
+    /// in memory, cleared when listening is turned off; no sound.
     /// </summary>
     public IReadOnlyList<string> RecentSounds => _recent;
 
@@ -282,7 +283,8 @@ internal sealed class ClapListener : IDisposable
             _ => judgement.Verdict.ToString(),
         };
         var drop = double.IsNaN(judgement.Drop) ? string.Empty : $", drop {judgement.Drop:0} dB";
-        return $"{verdict}  ·  high {judgement.High:+0;-0;0} dB, body {judgement.Body:+0;-0;0} dB, high−low {judgement.HighOverLow:+0;-0;0} dB{drop}";
+        return $"{verdict}  ·  high {judgement.High:+0;-0;0} dB, body {judgement.Body:+0;-0;0} dB, body−high {judgement.BodyOverHigh:+0;-0;0} dB, "
+               + $"high−low {judgement.HighOverLow:+0;-0;0} dB{drop}, peak {judgement.Peak:0} dBFS, rise {judgement.Rise:0} dB";
     }
 
     private void OnClapHeard()
@@ -347,11 +349,13 @@ internal sealed class ClapListener : IDisposable
         if (wasListening != IsListening)
         {
             _lastClap = null;
-            if (_recent.Count > 0)
-            {
-                _recent.Clear();
-                Heard?.Invoke(this, EventArgs.Empty);
-            }
+        }
+
+        // What it heard stays through a microphone restart (to copy it), until listening is off.
+        if (state is ClapListenerState.Off or ClapListenerState.NotNeeded && _recent.Count > 0)
+        {
+            _recent.Clear();
+            Heard?.Invoke(this, EventArgs.Empty);
         }
 
         Changed?.Invoke(this, EventArgs.Empty);

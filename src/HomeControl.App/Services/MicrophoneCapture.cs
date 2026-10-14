@@ -33,7 +33,8 @@ internal enum MicrophoneState
 /// No sound is kept. Windows hands over each packet in its own capture buffer; the detector
 /// reads it in place (a mixed-down copy, when one is needed, lives in a small stack buffer that
 /// is wiped) and the buffer goes back to Windows when the callback returns. Nothing is written
-/// to disk, logged or sent; only clap counts leave this class.
+/// to disk, logged or sent; only clap counts, and a few loudness figures about each sound the
+/// detector judged, leave this class.
 /// </para>
 /// <para>
 /// All device work happens on one background loop, one step at a time; callbacks from Windows
@@ -284,7 +285,7 @@ internal sealed class MicrophoneCapture : IDisposable
 
     private Task ReopenSpeakers()
     {
-        _speakerTaps?.Reopen();
+        _speakerTaps?.Reopen(devicesChanged: true);
         return Task.CompletedTask;
     }
 
@@ -396,6 +397,14 @@ internal sealed class MicrophoneCapture : IDisposable
                 return Task.CompletedTask;
             });
             _speakerTaps = speakers;
+            if (!raw)
+            {
+                // Windows' processing (noise suppression) may take away the background a sound
+                // from the speakers rose from, so it may reach the detector sharper than it was played.
+                speakers.Sounds.RiseMargin = SpeakerSounds.ProcessedRiseMargin;
+                Log.Info("The microphone can't be used raw: Windows' sound processing may be on");
+            }
+
             speakers.Reopen();
             if (speakers.Description.Length > 0)
             {

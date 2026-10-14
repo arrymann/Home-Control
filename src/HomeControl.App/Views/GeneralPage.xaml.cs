@@ -87,6 +87,7 @@ public sealed partial class GeneralPage : Page
     private void ShowHeard()
     {
         var recent = App.Host.Claps.RecentSounds;
+        ClapCopyButton.Content = "Copy";
         ClapHeardText.Text = recent.Count > 0
             ? string.Join("\n", recent)
             : App.Host.Claps.IsListening
@@ -96,9 +97,19 @@ public sealed partial class GeneralPage : Page
 
     private void OnClapCopyClick(object sender, RoutedEventArgs e)
     {
-        var package = new DataPackage();
-        package.SetText($"Home Control, clap sensitivity {Settings.Claps.Sensitivity}:\n{string.Join("\n", App.Host.Claps.RecentSounds)}");
-        Clipboard.SetContent(package);
+        try
+        {
+            var package = new DataPackage();
+            package.SetText($"Home Control, clap sensitivity {Settings.Claps.Sensitivity}:\n{string.Join("\n", App.Host.Claps.RecentSounds)}");
+            Clipboard.SetContent(package);
+            ClapCopyButton.Content = "Copied";
+        }
+        catch (Exception ex)
+        {
+            // The clipboard can be busy (another app holding it).
+            Log.Info($"Copying what it hears: {ex.GetType().Name} 0x{ex.HResult:X8}");
+            ClapCopyButton.Content = "Couldn't copy, try again";
+        }
     }
 
     private void UpdateClapStatus()

@@ -47,11 +47,18 @@ public enum ClapVerdict
 
 /// <summary>
 /// A few numbers about a sound the detector judged, to show why it did or didn't count (no
-/// sound): its verdict, how far its high band (2–7 kHz) and body (500 Hz–1.2 kHz) rose over the
-/// room's background, its high band against everything below 2 kHz, and how much it had dropped
-/// 40 ms after its peak (NaN if it was judged before then). Levels in dB.
+/// sound). Levels in dB.
 /// </summary>
-public readonly record struct ClapJudgement(ClapVerdict Verdict, double High, double Body, double HighOverLow, double Drop);
+/// <param name="Verdict">What it made of it.</param>
+/// <param name="High">How far its high band (2–7 kHz) rose over the room's background.</param>
+/// <param name="Body">How far its body (500 Hz–1.2 kHz) rose over the room's background.</param>
+/// <param name="BodyOverHigh">Its own body against its own high band (the room's share taken out of both).</param>
+/// <param name="HighOverLow">Its own high band against its own sound below 2 kHz.</param>
+/// <param name="Drop">How much it had dropped 40 ms after its peak (NaN if judged before then).</param>
+/// <param name="Peak">Its high band's peak, re full scale.</param>
+/// <param name="Rise">How sharply its high band rose over what came just before (what the speakers' sounds are compared with).</param>
+public readonly record struct ClapJudgement(
+    ClapVerdict Verdict, double High, double Body, double BodyOverHigh, double HighOverLow, double Drop, double Peak, double Rise);
 
 /// <summary>
 /// Hears claps in microphone sound and recognises 2, 3 or 4 claps in a row.
@@ -71,19 +78,21 @@ public readonly record struct ClapJudgement(ClapVerdict Verdict, double High, do
 /// (clicks next to the microphone don't), it has faded within about 150 ms, nothing rises again
 /// during an 80 ms hold, and the high band isn't far quieter than the low band (knocks and
 /// thumps are; claps with cupped hands can be 17 dB duller). It also has a body: hands meeting
-/// sound from about 500 Hz up, so the body band rises over its background too and isn't far
-/// quieter than the high band, while clicks, taps and a machine's ticks (a 3D printer's) are only
-/// high-pitched. Every test compares a band with its own background or with another band of the
-/// same sound, never with the room's other noise, so a loud hum doesn't hide claps.
+/// sound from about 500 Hz up, so the body band rises over its background, clearly more than
+/// that background moves by itself, and isn't far quieter than the high band, while clicks,
+/// taps and a machine's ticks (a 3D printer's) are only high-pitched. The balances between bands
+/// are of the sound's own energy, with the room's share taken out, so a loud hum or whine
+/// doesn't make claps look dull or bodiless.
 /// Claps in a row are 120–600 ms apart in a steady rhythm (no gap over 1.75 times another). A
 /// sequence starts only after 0.8 s without claps (or right after a finished sequence, so a
 /// pattern can be repeated) and 0.3 s without other sounds, any other sound that stands out
 /// during it cancels it, and it is reported once it is clearly over, so three claps never also
 /// count as two (a clap too late for the rhythm ends the sequence and may start the next). A try
 /// that was blocked but was a whole pair lets the next try follow straight away. Sounds that
-/// don't stand out from the room, and faint high ticks (the low band hardly rises and the high
-/// band stays 10 dB or more below the claps), don't count as other sounds; voices, music, knocks
-/// and anything about as loud as the claps do.
+/// don't stand out from the room, faint high ticks (the low band hardly rises and the high band
+/// stays 10 dB or more below the claps) and sounds with no body that stay a few dB below the
+/// claps don't count as other sounds; voices, music, knocks and anything about as loud as the
+/// claps do.
 /// </para>
 /// <para>
 /// A clap that starts when a sound from the PC's own speakers may be reaching the microphone,
@@ -116,7 +125,8 @@ public sealed class ClapDetector
     private const double BodyFrom = 500;      // Hz: the body of a clap (the hands' hollow, the slap of palms), above most hum ...
     private const double BodyTo = 1200;       // ... and below the ring of clicks and machine ticks
     private const double TickLowRise = 6;     // dB: a sound whose low band rises less than this is a high tick ...
-    private const double TickBelowClaps = 10; // dB: ... and a tick this far below the claps doesn't count
+    private const double TickBelowClaps = 10; // dB: ... and a tick this far below the claps doesn't count ...
+    private const double FaintBelowClaps = 3; // dB: ... nor one with no body this far below
     private const double BlockedQuiet = 0.45; // s: a blocked try is over after this long without claps
 
     private readonly int _blockLength;
@@ -159,6 +169,8 @@ public sealed class ClapDetector
     private double _high2;
     private double _low1;
     private double _low2;
+    private double _body1;
+    private double _bodyJitter; // how much the body band's background moves from block to block (dB)
 
     // The sound being judged.
     private bool _tracking;
@@ -312,7 +324,8 @@ public sealed class ClapDetector
         _learnUntil = Blocks(WarmUpSeconds);
         _floorHigh = _floorLow = _floorBody = _steadyFloorHigh = _steadyFloorLow = _steadyFloorBody = double.NaN;
         _wasSilent = false;
-        _high1 = _high2 = _low1 = _low2 = -200;
+        _high1 = _high2 = _low1 = _low2 = _body1 = -200;
+        _bodyJitter = double.NaN;
         _tracking = _decayed = false;
         _onsetBlock = _peakBlock = 0;
         _peakHigh = _peakLow = _peakBody = _onsetReference = 0;
@@ -394,10 +407,19 @@ public sealed class ClapDetector
             TryStart(high, low, body, thresholds);
         }
 
+        if (!silent && !_tracking && _body1 > -200)
+        {
+            // How much the body band's background moves by itself: a body must rise clearly more.
+            // (Steady hum or whine hardly moves; noise moves about 2 dB from one 10 ms to the next.)
+            var moved = Math.Min(6, Math.Abs(body - _body1));
+            _bodyJitter = double.IsNaN(_bodyJitter) ? moved : _bodyJitter + 0.02 * (moved - _bodyJitter);
+        }
+
         _high2 = _high1;
         _high1 = high;
         _low2 = _low1;
         _low1 = low;
+        _body1 = silent ? -200 : body;
         _block++;
         Advance(_block * _blockSeconds);
     }
@@ -483,7 +505,7 @@ public sealed class ClapDetector
 
         // It rises again (a plosive followed by a vowel, a second click): not a clap; maybe the
         // start of something new. (A rise from before the peak is the peak's own.)
-        if (high > _peakHigh + 3 || low > _peakLow + 3
+        if (high > _peakHigh + 3 || (low > _peakLow + 3 && low - _floorLow >= TickLowRise)
             || (_block - 2 > _peakBlock && high - Math.Max(_high2, _floorHigh) >= Math.Min(t.Rise, 10)))
         {
             Reject(t, ClapVerdict.RoseAgain);
@@ -525,11 +547,11 @@ public sealed class ClapDetector
 
         if (_decayed && sincePeak >= Blocks(TailCheckSeconds) && age >= Blocks(HoldSeconds))
         {
-            if (_peakHigh - _peakLow < t.MinHighOverLow)
+            if (HighOverLow() < t.MinHighOverLow)
             {
                 Reject(t, ClapVerdict.TooLowPitched); // a knock or a thump
             }
-            else if (_peakBody - _floorBody < t.MinBody || _peakBody - _peakHigh < t.MinBodyOverHigh)
+            else if (_peakBody - _floorBody < MinBodyRise(t) || BodyOverHigh() < t.MinBodyOverHigh)
             {
                 Reject(t, ClapVerdict.NoBody); // a click, a machine's tick
             }
@@ -544,6 +566,23 @@ public sealed class ClapDetector
             }
         }
     }
+
+    /// <summary>
+    /// The sound's own level in a band: its peak less the background's share (dB), so a loud
+    /// hum or music in that band doesn't count as the sound's. A sound that hardly rose has
+    /// little of its own.
+    /// </summary>
+    private static double Excess(double peak, double floor) =>
+        peak - floor < 0.05 ? peak - 20 : peak + 10 * Math.Log10(1 - Math.Pow(10, (floor - peak) / 10));
+
+    /// <summary>How far the body band must rise to be the sound's own and not the background moving (dB).</summary>
+    private double MinBodyRise(Thresholds t) => Math.Max(t.MinBody, t.BodyOverJitter * (double.IsNaN(_bodyJitter) ? 2 : _bodyJitter));
+
+    /// <summary>The sound's own body against its own high band (dB).</summary>
+    private double BodyOverHigh() => Excess(_peakBody, _floorBody) - Excess(_peakHigh, _floorHigh);
+
+    /// <summary>The sound's own high band against its own sound below 2 kHz (dB).</summary>
+    private double HighOverLow() => Excess(_peakHigh, _floorHigh) - Excess(_peakLow, _floorLow);
 
     /// <summary>Whether the sound being judged may have come from the PC's own speakers (as sharply as it rose).</summary>
     private bool FromSpeakers() =>
@@ -560,11 +599,12 @@ public sealed class ClapDetector
         var time = _onsetBlock * _blockSeconds;
 
         // Anything with a low part (a knock, a thump) always counts; the tick rules in Noise
-        // decide about the rest.
+        // decide about the rest. A sound with no body is a tick whatever its low band did, and
+        // has to be about as loud as the claps to spoil them.
         var stoodOut = _peakHigh - _floorHigh >= t.AboveFloor || _peakLow - _floorLow >= TickLowRise;
         if (stoodOut)
         {
-            Noise(time, _peakHigh - _floorHigh, _peakLow - _floorLow);
+            Noise(time, _peakHigh - _floorHigh, _peakLow - _floorLow, faint: why == ClapVerdict.NoBody);
         }
     }
 
@@ -585,7 +625,8 @@ public sealed class ClapDetector
     }
 
     private void Judged(ClapVerdict verdict) =>
-        SoundJudged?.Invoke(new ClapJudgement(verdict, _peakHigh - _floorHigh, _peakBody - _floorBody, _peakHigh - _peakLow, _drop));
+        SoundJudged?.Invoke(new ClapJudgement(verdict, _peakHigh - _floorHigh, _peakBody - _floorBody, BodyOverHigh(), HighOverLow(),
+            _drop, _peakHigh, _peakHigh - _onsetReference));
 
     /// <param name="level">The clap's high band peak above the background (dB).</param>
     private void Clap(double time, double level)
@@ -654,10 +695,15 @@ public sealed class ClapDetector
         return true;
     }
 
-    /// <summary>A sound that isn't a clap, <paramref name="high"/> and <paramref name="low"/> dB above the background at its peak.</summary>
-    private void Noise(double time, double high, double low)
+    /// <summary>
+    /// A sound that isn't a clap, <paramref name="high"/> and <paramref name="low"/> dB above the
+    /// background at its peak. <paramref name="faint"/>: a tick whatever its low band did (it has
+    /// no body), which has to be about as loud as the claps to count, not merely within 10 dB.
+    /// </summary>
+    private void Noise(double time, double high, double low, bool faint = false)
     {
-        if (low >= TickLowRise)
+        var sound = !faint && low >= TickLowRise;
+        if (sound)
         {
             _lastNoise = time;
         }
@@ -665,11 +711,16 @@ public sealed class ClapDetector
         {
             // A high tick (a 3D printer, a fan, a click): it counts only if about as loud as the
             // claps, so remember the loudest of the last few.
+            if (faint)
+            {
+                high -= TickBelowClaps - FaintBelowClaps;
+            }
+
             _lastTickHigh = time - _lastTick < NoiseGuard ? Math.Max(_lastTickHigh, high) : high;
             _lastTick = time;
         }
 
-        if (_claps > 0 && (low >= TickLowRise || high > _quietestClap - TickBelowClaps))
+        if (_claps > 0 && (sound || high > _quietestClap - TickBelowClaps))
         {
             Cancel(time);
         }
@@ -750,8 +801,9 @@ public sealed class ClapDetector
     /// <param name="Rise">High band peak above the level two blocks before.</param>
     /// <param name="MinimumLevel">High band peak level (re full scale).</param>
     /// <param name="MinHighOverLow">High band peak minus low band peak (cupped claps reach -17).</param>
-    /// <param name="MinBody">Body band (500 Hz–1.2 kHz) peak above its background (less: a click or a tick, not a clap).</param>
-    /// <param name="MinBodyOverHigh">Body band peak minus high band peak (claps reach -14; clicks and ticks, -22 and less).</param>
+    /// <param name="MinBody">Body band (500 Hz–1.2 kHz) peak above its background, at least (less: a click or a tick, not a clap).</param>
+    /// <param name="BodyOverJitter">... and at least this many times how much that background moves by itself.</param>
+    /// <param name="MinBodyOverHigh">The sound's own body minus its own high band (claps reach -14; clicks and ticks, -22 and less).</param>
     /// <param name="MinDrop">Least drop 40 ms after the peak (less: sustained).</param>
     /// <param name="MinTail">Least level above the background 40 ms after the peak (less: dry).</param>
     /// <param name="MaxDrop">Most drop 40 ms after the peak (more: dry).</param>
@@ -764,6 +816,7 @@ public sealed class ClapDetector
         double MinimumLevel,
         double MinHighOverLow,
         double MinBody,
+        double BodyOverJitter,
         double MinBodyOverHigh,
         double MinDrop,
         double MinTail,
@@ -772,9 +825,9 @@ public sealed class ClapDetector
         double DecayLow,
         double DecayWindowMs)
     {
-        private static readonly Thresholds LowSensitivity = new(28, 18, -55, -21, 9, -16, 4, 12, 24, 12, 10, 120);
-        private static readonly Thresholds MediumSensitivity = new(21, 14, -62, -22, 7, -18, 3, 10, 24, 10, 8, 150);
-        private static readonly Thresholds HighSensitivity = new(15, 10, -70, -24, 6, -20, 2, 3, 24, 8, 6, 200);
+        private static readonly Thresholds LowSensitivity = new(28, 18, -55, -21, 5, 5.0, -18, 4, 12, 24, 12, 10, 120);
+        private static readonly Thresholds MediumSensitivity = new(21, 14, -62, -22, 3, 3.5, -19, 3, 10, 24, 10, 8, 150);
+        private static readonly Thresholds HighSensitivity = new(15, 10, -70, -24, 2.5, 3.5, -20, 2, 3, 24, 8, 6, 200);
 
         public static Thresholds For(ClapSensitivity sensitivity) => sensitivity switch
         {

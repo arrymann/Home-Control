@@ -39,7 +39,7 @@ public sealed class SpeakerStream
     private const double StartRise = 4;     // dB over the reference: maybe a sharp sound...
     private const double Rise = 6;          // ...which it is if its peak, within two more blocks, is this far over it
     private const double MinimumLevel = -80; // dB re full scale: anything quieter is inaudible
-    private const double GapSeconds = 0.02; // a jump in time this big means nothing played (or sound was lost)
+    private const double GapSeconds = 0.05; // a jump in time this big means nothing played (or sound was lost), not timestamp jitter
 
     private readonly SpeakerSounds _sounds;
     private readonly int _blockLength;

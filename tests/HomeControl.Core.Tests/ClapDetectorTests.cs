@@ -645,6 +645,70 @@ public class ClapDetectorTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new ClapDetector(4000));
     }
 
+    // ---------------------------------------------------------------- whatever the room sounds like
+
+    [Theory]
+    [InlineData(-35)]
+    [InlineData(-20)]
+    [InlineData(-3)]
+    public void Hears_bright_claps_with_little_body(double level)
+    {
+        // Flat, bright claps: almost nothing below 800 Hz. Their body is faint but their own.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddClap(1.0, level, lowHz: 800).AddClap(1.3, level, lowHz: 800);
+            foreach (var sensitivity in AllSensitivities)
+            {
+                Assert.Equal([2], Listen(signal, [2], sensitivity).Patterns.Select(p => p.Count));
+            }
+        });
+    }
+
+    [Fact]
+    public void A_loud_hum_doesnt_make_claps_too_low_pitched()
+    {
+        // The room's hum is far louder than the claps below 2 kHz: the claps' own sound is what counts.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddTone(100, -18).AddTone(200, -24).AddClaps(1.0, 0.3, 2, -32);
+            var judged = new List<ClapJudgement>();
+            var detector = new ClapDetector(rate, ClapSensitivity.High) { Counts = [2] };
+            detector.SoundJudged += judged.Add;
+            var patterns = new List<int>();
+            detector.PatternDetected += patterns.Add;
+            detector.Process(signal.Samples);
+
+            Assert.DoesNotContain(judged, j => j.Verdict == ClapVerdict.TooLowPitched);
+            Assert.Equal([2], patterns);
+        });
+    }
+
+    [Fact]
+    public void Hears_claps_over_a_machines_whine()
+    {
+        // A stepper motor whining steadily at 700 and 940 Hz, right in the claps' body.
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 3).AddTone(700, -40).AddTone(940, -40).AddClaps(1.0, 0.3, 2);
+
+            Assert.Equal([2], Listen(signal, [2]).Patterns.Select(p => p.Count));
+        });
+    }
+
+    [Fact]
+    public void A_printers_ticks_near_the_claps_dont_spoil_them()
+    {
+        // Ticks with no body, well below the claps, just before, between and after them (once
+        // the clap's tail has faded: a tick right on it is measured with the tail).
+        ForEachRate(rate =>
+        {
+            var signal = new ClapSignals(rate, 4).AddPrinterRoom()
+                .AddPrinterTick(1.6, -33).AddClaps(2.0, 0.3, 2, -20).AddPrinterTick(2.2, -33).AddPrinterTick(2.9, -33);
+
+            Assert.Equal([2], Listen(signal, [2]).Patterns.Select(p => p.Count));
+        });
+    }
+
     // ---------------------------------------------------------------- what it tells the user
 
     [Fact]

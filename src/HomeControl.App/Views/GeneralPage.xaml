@@ -107,7 +107,7 @@
                                 FontSize="12"
                                 IsTextSelectionEnabled="True"
                                 TextWrapping="Wrap" />
-                            <Button Click="OnClapCopyClick" Content="Copy" />
+                            <Button x:Name="ClapCopyButton" Click="OnClapCopyClick" Content="Copy" />
                         </StackPanel>
                     </toolkit:SettingsCard>
                     <toolkit:SettingsCard ContentAlignment="Left">

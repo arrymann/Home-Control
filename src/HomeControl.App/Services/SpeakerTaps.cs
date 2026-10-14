@@ -10,9 +10,10 @@ namespace HomeControl.Services;
 /// <summary>
 /// Follows what the PC plays on each of its speaker devices (WASAPI loopback, shared mode), so
 /// that the clap detector can tell the speakers' claps from the user's. Nothing is played,
-/// recorded or kept: like the microphone, each loopback packet is read in place (a mixed-down
-/// piece lives in a small stack buffer that is wiped) and only the times of sharp sounds remain
-/// in <see cref="Sounds"/>.
+/// recorded or kept: like the microphone, each loopback packet is read in place (one channel at
+/// a time, a piece at a time, in a small stack buffer that is wiped) and only the times and
+/// sharpness of sharp sounds remain in <see cref="Sounds"/>. Each channel is followed on its own,
+/// so a sound from one speaker isn't softened by the others' quiet.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -34,6 +35,8 @@ internal sealed class SpeakerTaps : IDisposable
 {
     private const long BufferDuration = 10_000_000; // 1 s (100 ns units): read every ~100 ms, so never overflows
     private const int RetryMilliseconds = 5000;
+    private const int FirstRetryMilliseconds = 500;
+    private const int LongestRetryMilliseconds = 30_000;
 
     // PKEY_Device_EnumeratorName: the bus the device is on ("BTHENUM", "USB", "HDAUDIO", ...). UNVERIFIED that endpoints carry it.
     private static readonly PropertyKey EnumeratorName = new(new Guid(unchecked((int)0xa45c254e), unchecked((short)0xdf1c), 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0), 24);
@@ -42,8 +45,10 @@ internal sealed class SpeakerTaps : IDisposable
     private readonly object _reopening = new(); // one Reopen or Dispose at a time (loop thread, retry timer)
     private readonly MMDeviceEnumerator _enumerator = new();
     private readonly Timer _retry;
+    private readonly HashSet<string> _reportedFailures = []; // under _reopening: device and error, logged once
     private Tap[] _taps = [];
     private bool _retryArmed; // under _gate: a failed stream already asked for a Reopen
+    private int _retryDelay = FirstRetryMilliseconds; // under _gate: doubles while streams keep failing
     private volatile bool _disposed;
 
     public SpeakerTaps()
@@ -66,16 +71,36 @@ internal sealed class SpeakerTaps : IDisposable
     /// <summary>
     /// Opens a loopback stream on every speaker device that's plugged in (again: after a device
     /// was added, removed or changed). Headphones and headsets are left out: the room doesn't
-    /// hear them. Slow (COM calls): call it off the capture thread. The new streams are opened
-    /// before the lock is taken, so the capture thread only ever waits for the swap.
+    /// hear them. A device whose stream still works keeps it (a new one would take its first
+    /// sound for a sharp rise out of silence). Slow (COM calls): call it off the capture thread.
+    /// The new streams are opened before the lock is taken, so the capture thread only ever
+    /// waits for the swap.
     /// </summary>
-    public void Reopen()
+    /// <param name="devicesChanged">Windows said a device came, went or changed: try failed ones again soon.</param>
+    public void Reopen(bool devicesChanged = false)
     {
         lock (_reopening)
         {
             if (_disposed)
             {
                 return;
+            }
+
+            if (devicesChanged)
+            {
+                lock (_gate)
+                {
+                    _retryDelay = FirstRetryMilliseconds;
+                }
+            }
+
+            var current = _taps; // only Reopen and Dispose replace it, and they hold _reopening
+            foreach (var tap in current)
+            {
+                if (tap.Failure is { } failure && _reportedFailures.Add($"{tap.DeviceId} {failure}"))
+                {
+                    Log.Info($"Following “{tap.Name}” stopped: {failure}");
+                }
             }
 
             var taps = new List<Tap>();
@@ -86,7 +111,7 @@ internal sealed class SpeakerTaps : IDisposable
                 using var devices = _enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
                 for (var i = 0; i < devices.Count; i++)
                 {
-                    Open(devices[i], taps, notes, ref inUse);
+                    Open(devices[i], current, taps, notes, ref inUse);
                 }
             }
             catch (Exception ex)
@@ -120,13 +145,19 @@ internal sealed class SpeakerTaps : IDisposable
             // No Drain can be reading these any more: it only reads the array under the lock.
             foreach (var tap in old)
             {
-                CloseQuietly(tap);
+                if (!taps.Contains(tap))
+                {
+                    CloseQuietly(tap);
+                }
             }
         }
     }
 
-    /// <summary>Opens one device's stream into <paramref name="taps"/>, or notes why not; disposes the device unless kept.</summary>
-    private void Open(MMDevice device, List<Tap> taps, List<string> notes, ref bool inUse)
+    /// <summary>
+    /// Opens one device's stream into <paramref name="taps"/> (or keeps its working one from
+    /// <paramref name="current"/>), or notes why not; disposes the device unless kept.
+    /// </summary>
+    private void Open(MMDevice device, Tap[] current, List<Tap> taps, List<string> notes, ref bool inUse)
     {
         var name = NameOf(device);
         var keep = false;
@@ -138,7 +169,15 @@ internal sealed class SpeakerTaps : IDisposable
                 return;
             }
 
-            taps.Add(new Tap(device, Sounds, maxDelay));
+            var id = device.ID;
+            if (Array.Find(current, tap => tap.DeviceId == id && tap.Failure is null) is { } working)
+            {
+                taps.Add(working);
+                notes.Add(name);
+                return;
+            }
+
+            taps.Add(new Tap(device, id, name, Sounds, maxDelay));
             keep = true;
             notes.Add(name);
         }
@@ -206,10 +245,12 @@ internal sealed class SpeakerTaps : IDisposable
             if (failed && !_retryArmed && !_disposed)
             {
                 // A device went away or was taken exclusively: look at it again (off this thread,
-                // once: the failed stream keeps failing until Reopen swaps it out).
+                // once: the failed stream keeps failing until Reopen swaps it out), less often
+                // while it keeps failing.
                 _retryArmed = true;
                 SetUnfollowed(true);
-                _retry.Change(500, Timeout.Infinite);
+                _retry.Change(_retryDelay, Timeout.Infinite);
+                _retryDelay = Math.Min(2 * _retryDelay, LongestRetryMilliseconds);
             }
         }
     }
@@ -318,21 +359,25 @@ internal sealed class SpeakerTaps : IDisposable
     /// <summary>One device's loopback stream, read on the microphone's capture thread.</summary>
     private sealed class Tap : IDisposable
     {
+        private const int MostChannels = 8; // 7.1; any further ones aren't followed
+
         private readonly MMDevice _device;
         private readonly AudioClient _client;
         private readonly AudioCaptureClient _capture;
-        private readonly SpeakerStream _stream;
+        private readonly SpeakerStream[] _streams; // one per channel: analysers, no sound
         private readonly PacketClock _clock;
         private readonly AudioEndpointVolume? _volume;
         private readonly bool _isFloat;
         private readonly int _channels;
         private readonly int _blockAlign;
         private volatile bool _silenced;
-        private bool _failed;
+        private volatile string? _failure;
 
-        public Tap(MMDevice device, SpeakerSounds sounds, double maxDelay)
+        public Tap(MMDevice device, string id, string name, SpeakerSounds sounds, double maxDelay)
         {
             _device = device;
+            DeviceId = id;
+            Name = name;
             _client = device.CreateAudioClient();
             try
             {
@@ -353,7 +398,12 @@ internal sealed class SpeakerTaps : IDisposable
                 // Loopback, shared mode (the only mode loopback exists in), polled: no EventCallback, no thread.
                 _client.Initialize(AudioClientShareMode.Shared, AudioClientStreamFlags.Loopback, BufferDuration, 0, format, Guid.Empty);
                 _capture = _client.AudioCaptureClient;
-                _stream = new SpeakerStream(sounds, format.SampleRate, maxDelay);
+                _streams = new SpeakerStream[Math.Min(_channels, MostChannels)];
+                for (var c = 0; c < _streams.Length; c++)
+                {
+                    _streams[c] = new SpeakerStream(sounds, format.SampleRate, maxDelay);
+                }
+
                 _clock = new PacketClock(format.SampleRate);
                 _client.Start();
             }
@@ -377,10 +427,17 @@ internal sealed class SpeakerTaps : IDisposable
             }
         }
 
+        public string DeviceId { get; }
+
+        public string Name { get; }
+
+        /// <summary>Why the stream failed (for good), or null while it works.</summary>
+        public string? Failure => _failure;
+
         /// <summary>Reads every packet waiting. False: the stream failed (device gone, or taken exclusively).</summary>
         public bool Drain()
         {
-            if (_failed)
+            if (_failure is not null)
             {
                 return false;
             }
@@ -399,23 +456,23 @@ internal sealed class SpeakerTaps : IDisposable
                     var time = _clock.TimeOf(lease.DevicePosition, lease.QPCPosition, lease.Flags, frames);
                     if (_silenced || (lease.Flags & (AudioClientBufferFlags.Silent | AudioClientBufferFlags.DataDiscontinuity)) != 0)
                     {
-                        _stream.Gap(); // silence, or sound lost: what comes next rises from nothing
+                        Gap(); // silence, or sound lost: what comes next rises from nothing
                         if (_silenced || (lease.Flags & AudioClientBufferFlags.Silent) != 0)
                         {
                             continue;
                         }
                     }
 
-                    MixDown(lease.Buffer, time);
+                    Analyse(lease.Buffer, time);
                 }
 
                 return true;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_DEVICE_IN_USE, ...: for good. Never let
-                // it reach the microphone's analysis.
-                _failed = true;
+                // it reach the microphone's analysis; the next Reopen logs it.
+                _failure = $"{ex.GetType().Name} 0x{ex.HResult:X8}";
                 return false;
             }
         }
@@ -436,44 +493,53 @@ internal sealed class SpeakerTaps : IDisposable
                 // Already gone.
             }
 
-            _stream.Reset();
+            foreach (var stream in _streams)
+            {
+                stream.Reset();
+            }
+
             _client.Dispose();
             _device.Dispose();
         }
 
+        private void Gap()
+        {
+            foreach (var stream in _streams)
+            {
+                stream.Gap();
+            }
+        }
+
         private void OnVolume(AudioVolumeNotificationData data) => _silenced = data.Muted || data.MasterVolume <= 0.001f;
 
-        /// <summary>Averages the channels into a small stack buffer, a piece at a time, and wipes it.</summary>
-        private void MixDown(ReadOnlySpan<byte> buffer, double time)
+        /// <summary>Follows each channel on its own, copying it a piece at a time into a small stack buffer that is wiped.</summary>
+        private void Analyse(ReadOnlySpan<byte> buffer, double time)
         {
-            Span<float> mono = stackalloc float[256];
+            Span<float> piece = stackalloc float[256];
             try
             {
                 var floats = _isFloat ? MemoryMarshal.Cast<byte, float>(buffer) : default;
                 var shorts = _isFloat ? default : MemoryMarshal.Cast<byte, short>(buffer);
                 var frames = (_isFloat ? floats.Length : shorts.Length) / _channels;
-                var rate = (double)_stream.SampleRate;
-                for (var start = 0; start < frames; start += mono.Length)
+                var rate = (double)_streams[0].SampleRate;
+                for (var c = 0; c < _streams.Length; c++)
                 {
-                    var count = Math.Min(mono.Length, frames - start);
-                    for (var i = 0; i < count; i++)
+                    for (var start = 0; start < frames; start += piece.Length)
                     {
-                        var first = (start + i) * _channels;
-                        var sum = 0f;
-                        for (var c = 0; c < _channels; c++)
+                        var count = Math.Min(piece.Length, frames - start);
+                        for (var i = 0; i < count; i++)
                         {
-                            sum += _isFloat ? floats[first + c] : shorts[first + c] / 32768f;
+                            var at = (start + i) * _channels + c;
+                            piece[i] = _isFloat ? floats[at] : shorts[at] / 32768f;
                         }
 
-                        mono[i] = sum / _channels;
+                        _streams[c].Process(piece[..count], time + start / rate);
                     }
-
-                    _stream.Process(mono[..count], time + start / rate);
                 }
             }
             finally
             {
-                mono.Clear();
+                piece.Clear();
             }
         }
     }
@@ -482,9 +548,9 @@ internal sealed class SpeakerTaps : IDisposable
 /// <summary>
 /// When a capture packet's first frame was recorded, in seconds on the QPC clock both streams
 /// share: the packet's own QPC position when Windows gives a sane one, else counted on from the
-/// last time it had one by device position, else (last resort) when the packet was read, which
-/// then becomes the point to count on from. Counting on keeps a stream's packets in step even
-/// when they are read in a burst, so they never look like a sound starting from silence.
+/// last time it had one by device position, but never later than the packet's arrival less its
+/// length (it can't have been recorded after that). Counting on keeps a stream's packets in step
+/// even when they are read in a burst, so they never look like a sound starting from silence.
 /// </summary>
 internal sealed class PacketClock(int sampleRate)
 {
@@ -502,17 +568,18 @@ internal sealed class PacketClock(int sampleRate)
             return stamped;
         }
 
+        var arrived = now - frames / (double)sampleRate; // the latest it can have been recorded
         var counted = devicePosition - _anchorPosition;
         if (!double.IsNaN(_anchorTime) && counted >= 0 && counted < 60L * sampleRate)
         {
             var time = _anchorTime + counted / (double)sampleRate;
-            if (time <= now + 0.05 && time >= now - 1.5)
+            if (time <= arrived + 0.002 && time >= now - 1.5)
             {
                 return time;
             }
         }
 
-        var arrived = now - frames / (double)sampleRate;
+        // No anchor yet, or it was read late: anchor on this packet's arrival, the earliest seen.
         _anchorTime = arrived;
         _anchorPosition = devicePosition;
         return arrived;

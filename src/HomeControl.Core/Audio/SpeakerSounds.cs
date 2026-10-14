@@ -27,13 +27,17 @@ public sealed class SpeakerSounds
 {
     private const double JoinSeconds = 0.03; // windows this close (of one sound, or of sounds about as sharp) become one
     private const double JoinRise = 6;       // dB: "about as sharp"
-    private const double RiseMargin = 6;     // dB: the two streams cut their 10 ms blocks at different moments
+    private const double KeepSeconds = 0.6;  // a window may still be asked about this long after it ends
+
+    /// <summary>A microphone with Windows' processing: noise suppression can sharpen what it lets through.</summary>
+    public const double ProcessedRiseMargin = 16;
 
     private Window _window0 = Window.None;
     private Window _window1 = Window.None;
     private Window _window2 = Window.None;
     private Window _window3 = Window.None;
     private volatile bool _unfollowed;
+    private double _riseMargin = 6;
 
     /// <summary>
     /// A speaker device can't be followed right now (another app has it in exclusive mode, or
@@ -47,13 +51,28 @@ public sealed class SpeakerSounds
     }
 
     /// <summary>
+    /// How much more sharply than the speakers' sound a sound at the microphone may rise and
+    /// still be theirs (dB): 6 for the two streams cutting their 10 ms blocks at different
+    /// moments; <see cref="ProcessedRiseMargin"/> when the microphone isn't raw, since noise
+    /// suppression can take away the background a sound rose from.
+    /// </summary>
+    public double RiseMargin
+    {
+        get => _riseMargin;
+        set => _riseMargin = value;
+    }
+
+    /// <summary>
     /// Whether a sound that started at the microphone at <paramref name="time"/>, rising
     /// <paramref name="rise"/> dB over what it heard just before, may be the speakers'.
     /// </summary>
-    public bool MayExplain(double time, double rise = 0) =>
-        _window0.Explains(time, rise) || _window1.Explains(time, rise) || _window2.Explains(time, rise) || _window3.Explains(time, rise);
+    public bool MayExplain(double time, double rise = 0)
+    {
+        var limit = rise - _riseMargin;
+        return _window0.Explains(time, limit) || _window1.Explains(time, limit) || _window2.Explains(time, limit) || _window3.Explains(time, limit);
+    }
 
-    /// <summary>Forgets the windows (not <see cref="PlayingUnseen"/>, which describes the device, not the sound).</summary>
+    /// <summary>Forgets the windows (not <see cref="Unfollowed"/> or <see cref="RiseMargin"/>, which describe the devices).</summary>
     public void Reset()
     {
         _window0 = _window1 = _window2 = _window3 = Window.None;
@@ -84,24 +103,53 @@ public sealed class SpeakerSounds
         }
         else
         {
-            // ...or replace the one that ended first.
+            // ...or take the place of one that is over, the one that ended first...
             var window = new Window(from, to, rise);
             var earliest = Math.Min(Math.Min(_window0.To, _window1.To), Math.Min(_window2.To, _window3.To));
-            if (_window0.To == earliest)
+            if (earliest < from - KeepSeconds)
             {
-                _window0 = window;
+                if (_window0.To == earliest)
+                {
+                    _window0 = window;
+                }
+                else if (_window1.To == earliest)
+                {
+                    _window1 = window;
+                }
+                else if (_window2.To == earliest)
+                {
+                    _window2 = window;
+                }
+                else
+                {
+                    _window3 = window;
+                }
+
+                return;
             }
-            else if (_window1.To == earliest)
+
+            // ...or, all four still being needed, join the one about as sharp as it: never lose one
+            // (it may explain more than it should for a moment, but never less).
+            var d0 = Math.Abs(_window0.Rise - rise);
+            var d1 = Math.Abs(_window1.Rise - rise);
+            var d2 = Math.Abs(_window2.Rise - rise);
+            var d3 = Math.Abs(_window3.Rise - rise);
+            var nearest = Math.Min(Math.Min(d0, d1), Math.Min(d2, d3));
+            if (d0 == nearest)
             {
-                _window1 = window;
+                _window0 = _window0.With(from, to, rise);
             }
-            else if (_window2.To == earliest)
+            else if (d1 == nearest)
             {
-                _window2 = window;
+                _window1 = _window1.With(from, to, rise);
+            }
+            else if (d2 == nearest)
+            {
+                _window2 = _window2.With(from, to, rise);
             }
             else
             {
-                _window3 = window;
+                _window3 = _window3.With(from, to, rise);
             }
         }
     }
@@ -118,7 +166,8 @@ public sealed class SpeakerSounds
         public readonly double To = to;
         public readonly double Rise = rise;
 
-        public bool Explains(double time, double rise) => time >= From && time <= To && rise <= Rise + RiseMargin;
+        /// <param name="limit">The rise at the microphone less the margin: at most this window's.</param>
+        public bool Explains(double time, double limit) => time >= From && time <= To && limit <= Rise;
 
         // The same sound seen in the next block too, or another about as sharp nearby (a beat).
         public bool Joins(double from, double to, double rise) =>
