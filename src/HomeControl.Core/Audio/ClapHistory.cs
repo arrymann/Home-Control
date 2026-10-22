@@ -133,6 +133,7 @@ public sealed class ClapHistory
             {
                 Keep(index, index); // just after a sound's verdict
             }
+
             Summarize(index, state, high, low, body, silent, speakerRise);
             if (index % ContextBlocks == 0)
             {
