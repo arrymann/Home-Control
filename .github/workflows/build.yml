@@ -23,6 +23,8 @@ jobs:
           dotnet-version: 10.0.x
       - name: Test
         run: dotnet test tests/HomeControl.Core.Tests/HomeControl.Core.Tests.csproj -c Release
+      - name: Clap replay tool
+        run: dotnet build tools/ClapReplay/ClapReplay.csproj -c Release
 
   app:
     name: App (${{ matrix.platform }})

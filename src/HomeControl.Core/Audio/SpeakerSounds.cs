@@ -72,6 +72,24 @@ public sealed class SpeakerSounds
         return _window0.Explains(time, limit) || _window1.Explains(time, limit) || _window2.Explains(time, limit) || _window3.Explains(time, limit);
     }
 
+    /// <summary>
+    /// The sharpest rise (dB) of the speakers' sounds that may be reaching the microphone at
+    /// <paramref name="time"/>, or null when none may be (for the clap event log).
+    /// </summary>
+    public double? RiseAt(double time)
+    {
+        double? rise = null;
+        foreach (var window in (ReadOnlySpan<Window>)[_window0, _window1, _window2, _window3])
+        {
+            if (time >= window.From && time <= window.To && (rise is null || window.Rise > rise))
+            {
+                rise = window.Rise;
+            }
+        }
+
+        return rise;
+    }
+
     /// <summary>Forgets the windows (not <see cref="Unfollowed"/> or <see cref="RiseMargin"/>, which describe the devices).</summary>
     public void Reset()
     {

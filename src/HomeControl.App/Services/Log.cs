@@ -46,5 +46,8 @@ internal static class AppPaths
 
     public static string AutomationsFile => Path.Combine(DataDirectory, "automations.json");
 
+    /// <summary>The clap event log (one file per event).</summary>
+    public static string ClapEventsDirectory => Path.Combine(DataDirectory, "Clap events");
+
     public static string Asset(string name) => Path.Combine(AppContext.BaseDirectory, "Assets", name);
 }

@@ -754,8 +754,35 @@ public class ClapDetectorTests
                                   (g == typeof(Memory<>) || g == typeof(ReadOnlyMemory<>) || g == typeof(ArraySegment<>)));
                 Assert.False(holdsSound, $"{type.Name}.{field.Name} ({fieldType.Name}) could hold samples");
                 Assert.True(
-                    fieldType.IsPrimitive || fieldType.IsEnum || typeof(Delegate).IsAssignableFrom(fieldType) || types.Contains(fieldType),
+                    fieldType.IsPrimitive || fieldType.IsEnum || typeof(Delegate).IsAssignableFrom(fieldType) || types.Contains(fieldType)
+                    || fieldType == typeof(ClapHistory), // given figures only: see the next test
                     $"{type.Name}.{field.Name} has an unexpected type {fieldType.Name}");
+            }
+        }
+    }
+
+    [Fact]
+    public void The_clap_event_log_is_given_figures_never_sound()
+    {
+        // All the history is ever handed are single numbers and the detector's state and
+        // verdicts, which are numbers too: nothing that could carry samples.
+        Type[] figures = [typeof(ClapDetectorState), typeof(ClapJudgement)];
+        foreach (var type in figures)
+        {
+            foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public))
+            {
+                Assert.True(field.FieldType.IsPrimitive || field.FieldType.IsEnum, $"{type.Name}.{field.Name} ({field.FieldType.Name})");
+            }
+        }
+
+        const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        foreach (var method in typeof(ClapHistory).GetMethods(all).Concat<MethodBase>(typeof(ClapHistory).GetConstructors(all)))
+        {
+            foreach (var parameter in method.GetParameters())
+            {
+                var parameterType = parameter.ParameterType.IsByRef ? parameter.ParameterType.GetElementType()! : parameter.ParameterType;
+                var number = Nullable.GetUnderlyingType(parameterType) ?? parameterType;
+                Assert.True(number.IsPrimitive || number.IsEnum || figures.Contains(number), $"ClapHistory.{method.Name}({parameter.Name}: {parameterType.Name}) could carry sound");
             }
         }
     }

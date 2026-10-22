@@ -95,6 +95,9 @@ public sealed class ClapSettings
 
     /// <summary>Close the microphone while the PC is locked.</summary>
     public bool PauseWhileLocked { get; set; }
+
+    /// <summary>Save clap events (claps heard, claps it missed) with the detector's figures, to mark and send.</summary>
+    public bool SaveEvents { get; set; } = true;
 }
 
 /// <summary>Options for talking to the Google Assistant SDK.</summary>

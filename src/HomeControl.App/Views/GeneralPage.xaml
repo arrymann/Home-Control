@@ -4,6 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:HomeControl.Controls"
+    xmlns:local="using:HomeControl.Views"
     xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
 
     <ScrollViewer>
@@ -110,10 +111,76 @@
                             <Button x:Name="ClapCopyButton" Click="OnClapCopyClick" Content="Copy" />
                         </StackPanel>
                     </toolkit:SettingsCard>
+                    <toolkit:SettingsCard
+                        Description="When it hears claps, and when you say it missed some, it saves the figures it went by over the half minute before (never the sound), so you can mark what it got wrong and send them to improve it."
+                        Header="Save clap events">
+                        <ToggleSwitch x:Name="ClapEventsSwitch" Toggled="OnClapEventsToggled" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard
+                        x:Name="ClapEventsCard"
+                        ContentAlignment="Vertical"
+                        Description="Mark each one: your claps, not claps (and what it was), or claps it missed. The tray menu has “Those last claps weren't mine” and “I clapped and it didn't hear” too. Export them to send them."
+                        Header="Clap events">
+                        <StackPanel HorizontalAlignment="Stretch" Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button
+                                    x:Name="ClapMissedButton"
+                                    Click="OnClapMissedClick"
+                                    Content="I clapped and it didn't hear"
+                                    ToolTipService.ToolTip="Saves what it heard in the last half minute" />
+                                <Button x:Name="ClapExportButton" Click="OnClapExportClick" Content="Export…" />
+                                <Button Click="OnClapEventsFolderClick" Content="Open folder" />
+                                <Button x:Name="ClapDeleteButton" Click="OnClapDeleteClick" Content="Delete all" />
+                            </StackPanel>
+                            <TextBlock x:Name="ClapEventsMessage" TextWrapping="Wrap" Visibility="Collapsed" />
+                            <TextBlock x:Name="ClapEventsSummary" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            <ItemsControl x:Name="ClapEventList" IsTabStop="False">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Spacing="12" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="local:ClapEventItem">
+                                        <Grid ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="{x:Bind Title}" />
+                                                <TextBlock
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Text="{x:Bind Description}"
+                                                    TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Width="220" Spacing="4">
+                                                <ComboBox
+                                                    HorizontalAlignment="Stretch"
+                                                    AutomationProperties.Name="What it was"
+                                                    SelectedIndex="{x:Bind FlagIndex}"
+                                                    SelectionChanged="OnClapFlagChanged">
+                                                    <ComboBoxItem Content="Not marked" />
+                                                    <ComboBoxItem Content="My claps: it was right" />
+                                                    <ComboBoxItem Content="Not claps: it was wrong" />
+                                                    <ComboBoxItem Content="It missed my claps" />
+                                                </ComboBox>
+                                                <TextBox
+                                                    AutomationProperties.Name="Note"
+                                                    LostFocus="OnClapNoteLostFocus"
+                                                    PlaceholderText="What made the sound?"
+                                                    Text="{x:Bind Note}" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </toolkit:SettingsCard>
                     <toolkit:SettingsCard ContentAlignment="Left">
                         <TextBlock
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="No sound is kept. It is analysed as it arrives, 10 ms at a time, and reduced to a few loudness figures; the sound itself is never recorded, saved, logged or sent anywhere. The microphone is open only while this is on and an enabled automation has a Claps trigger (Automations page). What the PC plays on its speakers (not headphones) is followed the same way, so claps in videos, games or music don't count."
+                            Text="No sound is kept. It is analysed as it arrives, 10 ms at a time, and reduced to a few loudness figures; the sound itself is never recorded, saved, logged or sent anywhere. Clap events keep only those figures: for each sound it judged, the loudness of three pitch bands every 10 ms while it judged it (not for speech or music, which keep just their verdict), and every half second the room's background level. That is far too little to play anything back or make out what was said. The microphone is open only while this is on and an enabled automation has a Claps trigger (Automations page). What the PC plays on its speakers (not headphones) is followed the same way, so claps in videos, games or music don't count."
                             TextWrapping="Wrap" />
                     </toolkit:SettingsCard>
                 </toolkit:SettingsExpander.Items>

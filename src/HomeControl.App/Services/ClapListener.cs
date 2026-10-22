@@ -27,9 +27,9 @@ internal enum ClapListenerState
 /// <summary>
 /// Listens for claps while it is wanted: clap listening is on, an enabled automation has a Claps
 /// trigger, and the PC isn't asleep, locked (if the user asked) or used over Remote Desktop.
-/// Heard patterns go to the automations. Only clap counts, and a few loudness figures about
-/// each sound the detector judged (for "What it hears"), leave the microphone code; no sound.
-/// All members are used on the UI thread.
+/// Heard patterns go to the automations, and to the clap event log (<see cref="Events"/>) when
+/// the user keeps one. Only clap counts and the detector's own figures (for "What it hears" and
+/// clap events) leave the microphone code; no sound. All members are used on the UI thread.
 /// </summary>
 internal sealed class ClapListener : IDisposable
 {
@@ -49,18 +49,26 @@ internal sealed class ClapListener : IDisposable
     private string? _detail;
     private DateTimeOffset? _lastClap;
     private readonly List<string> _recent = [];
+    private int _savingHeard;
+    private ClapEventFlag? _flagForSaving;
 
     /// <param name="simulated">Smoke test: never opens the microphone, only shows what it would do.</param>
-    public ClapListener(DispatcherQueue dispatcher, Func<ClapSettings> settings, AutomationService automations, bool simulated)
+    /// <param name="eventsDirectory">Where the clap event log is kept.</param>
+    public ClapListener(DispatcherQueue dispatcher, Func<ClapSettings> settings, AutomationService automations, bool simulated, string eventsDirectory)
     {
         _dispatcher = dispatcher;
         _settings = settings;
         _automations = automations;
         _simulated = simulated;
+        Events = new ClapEventLog(dispatcher, eventsDirectory);
+        Events.Load();
         _automations.Changed += (_, _) => Update();
         _automations.PcEventOccurred += OnPcEvent;
         _automations.SessionMoved += OnSessionMoved;
     }
+
+    /// <summary>Claps it heard and claps the user says it missed, saved with the detector's figures to mark and send.</summary>
+    public ClapEventLog Events { get; }
 
     public ClapListenerState State { get; private set; } = ClapListenerState.Off;
 
@@ -174,6 +182,45 @@ internal sealed class ClapListener : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// The user clapped and it didn't hear it: saves what it worked out over the last half minute
+    /// as a clap event. False when it isn't listening (nothing to save).
+    /// </summary>
+    public bool SaveMissed()
+    {
+        if (!IsListening || _capture?.Source is not { } source)
+        {
+            return false;
+        }
+
+        Events.Save(ClapEventKind.Missed, 0, source, _settings(), _automations.Engine.ClapCounts(), DateTimeOffset.Now, ClapEventFlag.Missed);
+        return true;
+    }
+
+    /// <summary>
+    /// Marks the claps it heard last (in the last 15 minutes): e.g. those weren't claps. False
+    /// when there are none to mark.
+    /// </summary>
+    public bool FlagLatestHeard(ClapEventFlag flag)
+    {
+        if (_savingHeard > 0)
+        {
+            _flagForSaving = flag; // heard a moment ago: its event isn't saved yet
+            return true;
+        }
+
+        if (Events.LatestHeard() is not { } latest)
+        {
+            return false;
+        }
+
+        _ = Events.SetFlagAsync(latest.Id, flag);
+        return true;
+    }
+
+    /// <summary>Whether there are claps it heard lately, which <see cref="FlagLatestHeard"/> would mark.</summary>
+    public bool HasLatestHeard => _savingHeard > 0 || Events.LatestHeard() is not null;
+
     /// <summary>Tries the microphone again now (e.g. after changing Windows' privacy settings).</summary>
     public void Retry()
     {
@@ -205,7 +252,7 @@ internal sealed class ClapListener : IDisposable
     {
         // Only clap counts and a few numbers per judged sound cross to the UI thread.
         var capture = new MicrophoneCapture(
-            claps => _dispatcher.TryEnqueue(() => OnPattern(claps)),
+            (claps, source) => _dispatcher.TryEnqueue(() => OnPattern(claps, source)),
             () => _dispatcher.TryEnqueue(OnClapHeard),
             judgement => _dispatcher.TryEnqueue(() => OnSoundJudged(judgement)));
         capture.StateChanged += (state, detail) => _dispatcher.TryEnqueue(() => OnCaptureState(state, detail));
@@ -230,7 +277,7 @@ internal sealed class ClapListener : IDisposable
         }, state == MicrophoneState.RemoteSession ? RemoteDesktopPause : detail);
     }
 
-    private void OnPattern(int claps)
+    private void OnPattern(int claps, ClapSource source)
     {
         if (_disposed || !_running)
         {
@@ -242,6 +289,30 @@ internal sealed class ClapListener : IDisposable
         _automations.HandleClaps(claps);
         Remember($"{DateTimeOffset.Now:HH:mm:ss}  → {claps} claps in a row");
         Changed?.Invoke(this, EventArgs.Empty);
+        if (_settings().SaveEvents)
+        {
+            _ = SaveHeardAsync(claps, source);
+        }
+    }
+
+    /// <summary>Saves the claps heard as a clap event a moment later, so what came right after is in it too.</summary>
+    private async Task SaveHeardAsync(int claps, ClapSource source)
+    {
+        var time = DateTimeOffset.Now;
+        var counts = _automations.Engine.ClapCounts();
+        _savingHeard++;
+        try
+        {
+            await Task.Delay(ClapEventLog.SaveDelay);
+        }
+        finally
+        {
+            _savingHeard--;
+        }
+
+        var flag = _flagForSaving ?? ClapEventFlag.None;
+        _flagForSaving = null;
+        Events.Save(ClapEventKind.Heard, claps, source, _settings(), counts, time, flag);
     }
 
     private void OnSoundJudged(ClapJudgement judgement)

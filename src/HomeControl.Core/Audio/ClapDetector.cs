@@ -61,6 +61,38 @@ public readonly record struct ClapJudgement(
     ClapVerdict Verdict, double High, double Body, double BodyOverHigh, double HighOverLow, double Drop, double Peak, double Rise);
 
 /// <summary>
+/// <see cref="ClapDetector"/>'s working state at the start of a 10 ms block, enough to carry on
+/// judging from there (part of a saved clap event). Levels in dB; ages in blocks before it.
+/// </summary>
+/// <param name="FloorHigh">The room's background in the high band (2–7 kHz); NaN until it is learnt.</param>
+/// <param name="FloorLow">... below 2 kHz.</param>
+/// <param name="FloorBody">... in the body band (500 Hz–1.2 kHz).</param>
+/// <param name="SteadyHigh">The high band's background as it was in the last steady block (before a fade into silence).</param>
+/// <param name="SteadyLow">... below 2 kHz.</param>
+/// <param name="SteadyBody">... in the body band.</param>
+/// <param name="WasSilent">The block before was digital silence.</param>
+/// <param name="Jitter">How much the body band's background moves from block to block.</param>
+/// <param name="High1">The high band one block before.</param>
+/// <param name="High2">... two blocks before.</param>
+/// <param name="Low1">Below 2 kHz one block before.</param>
+/// <param name="Low2">... two blocks before.</param>
+/// <param name="Body1">The body band one block before.</param>
+/// <param name="LearnFor">Blocks left of learning the background.</param>
+/// <param name="Tracking">A sound is being judged.</param>
+/// <param name="Decayed">It has faded.</param>
+/// <param name="OnsetAge">How long ago it began.</param>
+/// <param name="PeakAge">How long ago it peaked.</param>
+/// <param name="PeakHigh">Its peak in the high band.</param>
+/// <param name="PeakLow">... below 2 kHz.</param>
+/// <param name="PeakBody">... in the body band.</param>
+/// <param name="OnsetReference">What its rise is measured from.</param>
+/// <param name="Drop">How much it had dropped 40 ms after its peak (NaN before then).</param>
+public readonly record struct ClapDetectorState(
+    double FloorHigh, double FloorLow, double FloorBody, double SteadyHigh, double SteadyLow, double SteadyBody, bool WasSilent, double Jitter,
+    double High1, double High2, double Low1, double Low2, double Body1, long LearnFor,
+    bool Tracking, bool Decayed, long OnsetAge, long PeakAge, double PeakHigh, double PeakLow, double PeakBody, double OnsetReference, double Drop);
+
+/// <summary>
 /// Hears claps in microphone sound and recognises 2, 3 or 4 claps in a row.
 /// </summary>
 /// <remarks>
@@ -136,6 +168,7 @@ public sealed class ClapDetector
     private volatile Thresholds _thresholds;
     private volatile int _counts;
     private volatile SpeakerSounds? _speakers;
+    private volatile ClapHistory? _history;
     private ClapSensitivity _sensitivity;
 
     // Front end: band filters and this block's running energy.
@@ -272,6 +305,23 @@ public sealed class ClapDetector
         set => _speakers = value;
     }
 
+    /// <summary>
+    /// Keeps what it worked out over the last half minute, for the clap event log (no sound).
+    /// Null: nothing is kept. Set it before the first <see cref="Process(ReadOnlySpan{float})"/>.
+    /// </summary>
+    public ClapHistory? History
+    {
+        get => _history;
+        set
+        {
+            value?.Attach(_blockSeconds, SampleRate);
+            _history = value;
+        }
+    }
+
+    /// <summary>Replays only: whether the speakers explain a sound that started at this block, rising this sharply.</summary>
+    internal Func<long, double, bool>? SpeakerCheck { get; set; }
+
     /// <summary>Analyses the next samples (mono, -1 to 1). Nothing is kept of them.</summary>
     /// <param name="startTime">
     /// When the first of them was recorded, in seconds on the clock that <see cref="Speakers"/>
@@ -309,6 +359,7 @@ public sealed class ClapDetector
     /// </summary>
     public void Interrupt()
     {
+        _history?.Interrupted(_block);
         _tracking = false;
         Noise(_block * _blockSeconds, double.PositiveInfinity, double.PositiveInfinity);
     }
@@ -363,7 +414,6 @@ public sealed class ClapDetector
         // Digital silence (muted, a dropout, a noise gate, or a very quiet room through a 16-bit
         // microphone) says nothing about the room: it never moves the background level, which
         // would otherwise sink far below the room and let dry clicks pass for claps.
-        var thresholds = _thresholds;
         var silent = energyHigh + energyLow < SilentEnergy;
         if (!double.IsFinite(high) || !double.IsFinite(low) || !double.IsFinite(body))
         {
@@ -373,6 +423,17 @@ public sealed class ClapDetector
             silent = true;
         }
 
+        ProcessLevels(high, low, body, silent);
+    }
+
+    /// <summary>
+    /// Judges one 10 ms block from its three loudness figures (dB): all the detector does after
+    /// its filters. Replays of saved clap events feed their blocks here.
+    /// </summary>
+    internal void ProcessLevels(double high, double low, double body, bool silent)
+    {
+        _history?.Block(_block, State(), high, low, body, silent, _speakers?.RiseAt(_block * _blockSeconds + _clockOffset));
+        var thresholds = _thresholds;
         if (silent && !_wasSilent && !double.IsNaN(_floorHigh) && !double.IsNaN(_steadyFloorHigh))
         {
             // The fade into silence (the filters ringing down) isn't the room either.
@@ -465,6 +526,7 @@ public sealed class ClapDetector
         // A rise in the low band alone (speech, a knock, a thump) is a sound but not a clap.
         if (low - _floorLow >= t.AboveFloor && low - Math.Max(_low2, _floorLow) >= t.Rise)
         {
+            _history?.Noise(_block, high - _floorHigh, low - _floorLow);
             Noise(_block * _blockSeconds, high - _floorHigh, low - _floorLow);
         }
 
@@ -586,7 +648,9 @@ public sealed class ClapDetector
 
     /// <summary>Whether the sound being judged may have come from the PC's own speakers (as sharply as it rose).</summary>
     private bool FromSpeakers() =>
-        _speakers is { } speakers && speakers.MayExplain(_onsetBlock * _blockSeconds + _clockOffset, _peakHigh - _onsetReference);
+        SpeakerCheck is { } check
+            ? check(_onsetBlock, _peakHigh - _onsetReference)
+            : _speakers is { } speakers && speakers.MayExplain(_onsetBlock * _blockSeconds + _clockOffset, _peakHigh - _onsetReference);
 
     /// <summary>
     /// Not a clap. It interrupts claps only if it stood out from the room: the faint ticks and
@@ -624,9 +688,13 @@ public sealed class ClapDetector
         return MaxCount;
     }
 
-    private void Judged(ClapVerdict verdict) =>
-        SoundJudged?.Invoke(new ClapJudgement(verdict, _peakHigh - _floorHigh, _peakBody - _floorBody, BodyOverHigh(), HighOverLow(),
-            _drop, _peakHigh, _peakHigh - _onsetReference));
+    private void Judged(ClapVerdict verdict)
+    {
+        var judgement = new ClapJudgement(verdict, _peakHigh - _floorHigh, _peakBody - _floorBody, BodyOverHigh(), HighOverLow(),
+            _drop, _peakHigh, _peakHigh - _onsetReference);
+        _history?.Judged(_onsetBlock, _block, judgement, _peakLow - _floorLow, _speakers?.RiseAt(_onsetBlock * _blockSeconds + _clockOffset));
+        SoundJudged?.Invoke(judgement);
+    }
 
     /// <param name="level">The clap's high band peak above the background (dB).</param>
     private void Clap(double time, double level)
@@ -744,14 +812,16 @@ public sealed class ClapDetector
     private void Finish(double now)
     {
         var claps = _claps;
+        var wanted = (_counts & (1 << claps)) != 0;
         _claps = 0;
         _lockedUntil = now;
         if (claps >= MinCount)
         {
             _previousClap = double.NegativeInfinity;
+            _history?.Pattern(_block, claps, wanted);
         }
 
-        if ((_counts & (1 << claps)) != 0)
+        if (wanted)
         {
             PatternDetected?.Invoke(claps);
         }
@@ -794,6 +864,92 @@ public sealed class ClapDetector
         {
             Finish(now);
         }
+    }
+
+    // ---------------------------------------------------------------- saved clap events
+
+    /// <summary>Its working state now, at the start of the next block.</summary>
+    internal ClapDetectorState State() => new(
+        _floorHigh, _floorLow, _floorBody, _steadyFloorHigh, _steadyFloorLow, _steadyFloorBody, _wasSilent, _bodyJitter,
+        _high1, _high2, _low1, _low2, _body1, _learnUntil - _block,
+        _tracking, _decayed, _block - _onsetBlock, _block - _peakBlock, _peakHigh, _peakLow, _peakBody, _onsetReference, _drop);
+
+    /// <summary>Replays: starts afresh at a block, as if it had been listening up to then with nothing heard.</summary>
+    internal void StartAt(long block)
+    {
+        Reset();
+        _block = block;
+        _learnUntil = block + Blocks(WarmUpSeconds);
+    }
+
+    /// <summary>Replays: takes up the state the detector had at the start of this block (not the claps in a row so far).</summary>
+    internal void Restore(ClapDetectorState state)
+    {
+        (_floorHigh, _floorLow, _floorBody) = (state.FloorHigh, state.FloorLow, state.FloorBody);
+        (_steadyFloorHigh, _steadyFloorLow, _steadyFloorBody) = (state.SteadyHigh, state.SteadyLow, state.SteadyBody);
+        _wasSilent = state.WasSilent;
+        _bodyJitter = state.Jitter;
+        (_high1, _high2, _low1, _low2, _body1) = (state.High1, state.High2, state.Low1, state.Low2, state.Body1);
+        _learnUntil = _block + state.LearnFor;
+        _tracking = state.Tracking;
+        _decayed = state.Decayed;
+        _onsetBlock = _block - state.OnsetAge;
+        _peakBlock = _block - state.PeakAge;
+        (_peakHigh, _peakLow, _peakBody, _onsetReference, _drop) = (state.PeakHigh, state.PeakLow, state.PeakBody, state.OnsetReference, state.Drop);
+    }
+
+    /// <summary>Replays: the block a sound being judged began at; null when none is.</summary>
+    internal long? Tracking => _tracking ? _onsetBlock : null;
+
+    /// <summary>Replays: stops judging a sound whose blocks ran out, without a verdict.</summary>
+    internal void ReplayAbandon() => _tracking = false;
+
+    /// <summary>Replays: a block whose levels weren't kept goes by (claps in a row still end on time).</summary>
+    internal void SkipBlock()
+    {
+        _block++;
+        Advance(_block * _blockSeconds);
+    }
+
+    /// <summary>Replays: a sound whose blocks weren't kept begins to be judged at this block.</summary>
+    internal void ReplayOnset()
+    {
+        _tracking = true;
+        _decayed = false;
+        _onsetBlock = _peakBlock = _block;
+        _drop = double.NaN;
+    }
+
+    /// <summary>Replays: the verdict on a sound whose blocks weren't kept, with what it does to claps in a row.</summary>
+    internal void ReplayVerdict(long onsetBlock, ClapJudgement judgement, double lowRise)
+    {
+        _tracking = false;
+        _onsetBlock = onsetBlock;
+        var time = onsetBlock * _blockSeconds;
+        if (judgement.Verdict is ClapVerdict.Clap or ClapVerdict.ClapNotCounted)
+        {
+            ClapHeard?.Invoke();
+            var counted = CountClap(time, judgement.High);
+            var verdict = counted ? ClapVerdict.Clap : ClapVerdict.ClapNotCounted;
+            _history?.Judged(onsetBlock, _block, judgement with { Verdict = verdict }, lowRise, null);
+            SoundJudged?.Invoke(judgement with { Verdict = verdict });
+            return;
+        }
+
+        _history?.Judged(onsetBlock, _block, judgement, lowRise, null);
+        SoundJudged?.Invoke(judgement);
+        var t = _thresholds;
+        if (judgement.High >= t.AboveFloor || lowRise >= TickLowRise)
+        {
+            Noise(time, judgement.High, lowRise, faint: judgement.Verdict == ClapVerdict.NoBody);
+        }
+    }
+
+    /// <summary>Replays: a rise of the low band alone at this block (speech, a knock), whose blocks weren't kept.</summary>
+    internal void ReplayNoise(double high, double low)
+    {
+        _history?.Noise(_block, high, low);
+        Noise(_block * _blockSeconds, high, low);
     }
 
     /// <summary>What a clap must measure up to (dB), per <see cref="ClapSensitivity"/>.</summary>

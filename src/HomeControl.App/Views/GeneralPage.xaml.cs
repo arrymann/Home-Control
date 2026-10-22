@@ -7,14 +7,43 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage.Pickers;
 
 namespace HomeControl.Views;
 
+/// <summary>A row in Settings › General › Clap events.</summary>
+public sealed class ClapEventItem
+{
+    internal ClapEventItem(ClapEventSummary summary)
+    {
+        Id = summary.Id;
+        var time = summary.Time.ToLocalTime();
+        Title = time.Date == DateTimeOffset.Now.Date ? $"Today {time:T}" : $"{time:d} {time:T}";
+        Description = summary.Description;
+        FlagIndex = (int)summary.Flag;
+        Note = summary.Note ?? "";
+    }
+
+    public string Id { get; }
+
+    public string Title { get; }
+
+    public string Description { get; }
+
+    /// <summary>The <see cref="ClapEventFlag"/>, as the index of its entry in the list.</summary>
+    public int FlagIndex { get; internal set; }
+
+    public string Note { get; internal set; }
+}
+
 public sealed partial class GeneralPage : Page
 {
+    private const int EventsShown = 25;
+
     private static GeneralPage? _current;
     private bool _loading;
     private int _microphoneLoads;
+    private string? _eventsShown;
 
     public GeneralPage()
     {
@@ -43,6 +72,7 @@ public sealed partial class GeneralPage : Page
         ClapSwitch.IsOn = Settings.Claps.Enabled;
         Select(ClapSensitivityBox, Settings.Claps.Sensitivity.ToString());
         ClapLockSwitch.IsOn = Settings.Claps.PauseWhileLocked;
+        ClapEventsSwitch.IsOn = Settings.Claps.SaveEvents;
         ShowMicrophones([], listed: false);
 
         var version = Assembly.GetExecutingAssembly().GetName().Version;
@@ -52,6 +82,7 @@ public sealed partial class GeneralPage : Page
         _current = this;
         App.Host.Claps.Changed += OnClapsChanged;
         App.Host.Claps.Heard += OnClapsHeard;
+        App.Host.Claps.Events.Changed += OnClapEventsChanged;
         App.Host.SettingsApplied += OnClapsChanged;
         UpdateClapStatus();
         ShowHeard();
@@ -63,6 +94,7 @@ public sealed partial class GeneralPage : Page
         base.OnNavigatedFrom(e);
         App.Host.Claps.Changed -= OnClapsChanged;
         App.Host.Claps.Heard -= OnClapsHeard;
+        App.Host.Claps.Events.Changed -= OnClapEventsChanged;
         App.Host.SettingsApplied -= OnClapsChanged;
         if (_current == this)
         {
@@ -80,7 +112,130 @@ public sealed partial class GeneralPage : Page
         }
     }
 
+    /// <summary>Scrolls to the clap events (used by the smoke test).</summary>
+    internal static void ShowClapEvents()
+    {
+        if (_current is { } page)
+        {
+            page.ClapExpander.IsExpanded = true;
+            page.ClapEventsCard.StartBringIntoView(new BringIntoViewOptions { VerticalAlignmentRatio = 0, AnimationDesired = false });
+        }
+    }
+
     private void OnClapsChanged(object? sender, EventArgs e) => UpdateClapStatus();
+
+    private void OnClapEventsChanged(object? sender, EventArgs e) => ShowClapEvents(force: false);
+
+    /// <summary>The newest clap events, rebuilt only when one was added or marked (so a note being typed isn't lost).</summary>
+    private void ShowClapEvents(bool force)
+    {
+        var events = App.Host.Claps.Events.Events;
+        var items = events.Take(EventsShown).Select(e => new ClapEventItem(e)).ToList();
+        var key = string.Join("|", items.Select(i => $"{i.Id}:{i.FlagIndex}:{i.Note}"));
+        if (force || key != _eventsShown)
+        {
+            _eventsShown = key;
+            ClapEventList.ItemsSource = items;
+        }
+
+        var marked = events.Count(e => e.Flag != ClapEventFlag.None);
+        ClapEventsSummary.Text = events.Count == 0
+            ? "None yet. They show up here when it hears claps, and when you say it missed some."
+            : $"{events.Count} saved, {marked} marked{(events.Count > EventsShown ? $"; the newest {EventsShown} are shown" : "")}.";
+        ClapExportButton.IsEnabled = ClapDeleteButton.IsEnabled = events.Count > 0;
+        ClapMissedButton.IsEnabled = Settings.Claps.SaveEvents && App.Host.Claps.IsListening;
+    }
+
+    private void ShowClapEventsMessage(string text)
+    {
+        ClapEventsMessage.Text = text;
+        ClapEventsMessage.Visibility = Visibility.Visible;
+    }
+
+    private void OnClapEventsToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loading)
+        {
+            Settings.Claps.SaveEvents = ClapEventsSwitch.IsOn;
+            App.Host.SaveSettings();
+        }
+    }
+
+    private void OnClapMissedClick(object sender, RoutedEventArgs e) =>
+        ShowClapEventsMessage(App.Host.Claps.SaveMissed()
+            ? "Saved what it heard in the last half minute. Add a note if you like."
+            : "It isn't listening right now, so there is nothing to save.");
+
+    private async void OnClapFlagChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox { DataContext: ClapEventItem item } box && box.SelectedIndex >= 0 && box.SelectedIndex != item.FlagIndex)
+        {
+            item.FlagIndex = box.SelectedIndex;
+            await App.Host.Claps.Events.SetFlagAsync(item.Id, (ClapEventFlag)box.SelectedIndex);
+        }
+    }
+
+    private async void OnClapNoteLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: ClapEventItem item } box && box.Text.Trim() != item.Note)
+        {
+            item.Note = box.Text.Trim();
+            await App.Host.Claps.Events.SetNoteAsync(item.Id, item.Note);
+        }
+    }
+
+    private async void OnClapExportClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new FileSavePicker
+            {
+                SuggestedStartLocation = PickerLocationId.Downloads,
+                SuggestedFileName = $"Home Control clap events {DateTime.Now:yyyy-MM-dd}",
+            };
+            picker.FileTypeChoices.Add("Zip file", [".zip"]);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, App.Host.SettingsWindowHandle);
+            var file = await picker.PickSaveFileAsync();
+            if (file is null)
+            {
+                return;
+            }
+
+            var count = await App.Host.Claps.Events.ExportAsync(file.Path);
+            ShowClapEventsMessage($"Exported {count} clap event{(count == 1 ? "" : "s")} to {file.Path}.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Exporting clap events", ex);
+            ShowClapEventsMessage("Couldn't export them: " + ex.Message);
+        }
+    }
+
+    private void OnClapEventsFolderClick(object sender, RoutedEventArgs e)
+    {
+        var folder = App.Host.Claps.Events.Folder;
+        Directory.CreateDirectory(folder);
+        Process.Start(new ProcessStartInfo(folder) { UseShellExecute = true });
+    }
+
+    private async void OnClapDeleteClick(object sender, RoutedEventArgs e)
+    {
+        var confirm = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            RequestedTheme = ActualTheme,
+            Title = "Delete all clap events?",
+            Content = "The events and what you marked are deleted. Export them first if you want to send them.",
+            PrimaryButtonText = "Delete",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await confirm.ShowAsync() == ContentDialogResult.Primary)
+        {
+            await App.Host.Claps.Events.DeleteAllAsync();
+            ShowClapEventsMessage("Deleted.");
+        }
+    }
 
     private void OnClapsHeard(object? sender, EventArgs e) => ShowHeard();
 
@@ -118,12 +273,14 @@ public sealed partial class GeneralPage : Page
         ClapExpander.Description = claps.StatusText;
         ClapBlockedBar.IsOpen = claps.State == ClapListenerState.Blocked;
         ShowHeard();
+        ShowClapEvents(force: false);
 
         // Also changed from the tray menu.
         var loading = _loading;
         _loading = true;
         ClapSwitch.IsOn = Settings.Claps.Enabled;
         ClapLockSwitch.IsOn = Settings.Claps.PauseWhileLocked;
+        ClapEventsSwitch.IsOn = Settings.Claps.SaveEvents;
         Select(ClapSensitivityBox, Settings.Claps.Sensitivity.ToString());
         _loading = loading;
     }

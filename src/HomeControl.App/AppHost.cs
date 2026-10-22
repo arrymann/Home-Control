@@ -1,4 +1,5 @@
 using HomeControl.Core.Assistant;
+using HomeControl.Core.Audio;
 using HomeControl.Core.Auth;
 using HomeControl.Core.Devices;
 using HomeControl.Core.GoogleHome;
@@ -179,7 +180,8 @@ internal sealed class AppHost
         };
 
         _automations = new AutomationService(this, _messageWindow, _http, _dispatcher, readOnly: IsSmokeTest);
-        _claps = new ClapListener(_dispatcher, () => Settings.Claps, _automations, simulated: IsSmokeTest);
+        _claps = new ClapListener(_dispatcher, () => Settings.Claps, _automations, simulated: IsSmokeTest,
+            eventsDirectory: IsSmokeTest ? Path.Combine(Path.GetTempPath(), "HomeControl smoke test", "Clap events") : AppPaths.ClapEventsDirectory);
         _claps.Changed += (_, _) => UpdateToolTip();
         PcPower.ShutdownFailed += (_, message) => _trayIcon.ShowNotification("Home Control", message);
 
@@ -629,6 +631,19 @@ internal sealed class AppHost
                     Settings.Claps.Enabled = !Settings.Claps.Enabled;
                     SaveSettings();
                 })
+            .AddIf(Settings.Claps.SaveEvents && _claps.HasLatestHeard, "Those last claps weren't mine", () =>
+            {
+                if (_claps.FlagLatestHeard(ClapEventFlag.NotClaps))
+                {
+                    _trayIcon.ShowNotification("Home Control", "Marked as not claps. Send it with the others from Settings › General › Clap events.");
+                }
+            })
+            .AddIf(Settings.Claps.SaveEvents && _claps.IsListening, "I clapped and it didn't hear", () =>
+            {
+                _trayIcon.ShowNotification("Home Control", _claps.SaveMissed()
+                    ? "Saved what it heard in the last half minute. Send it with the others from Settings › General › Clap events."
+                    : "It isn't listening right now, so there is nothing to save.");
+            })
             .Add("Settings", () => OpenSettings())
             .AddSeparator()
             .Add("Exit", Exit)

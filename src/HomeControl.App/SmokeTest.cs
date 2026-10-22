@@ -1,3 +1,4 @@
+using HomeControl.Core.Audio;
 using HomeControl.Core.Automations;
 using HomeControl.Core.GoogleHome;
 using HomeControl.Core.Hotkeys;
@@ -206,6 +207,16 @@ internal static class SmokeTest
             errors.Add($"Clap listening: expected to listen (simulated), but it is {host.Claps.State}: {host.Claps.StatusText}");
         }
 
+        // Clap events: one saved as the listener saves claps it heard (in a temporary folder), then the list.
+        var sample = SampleClapEvent();
+        await Step("clap event saved", () => host.Claps.Events.Save(sample), waitMs: 2000);
+        if (!host.Claps.Events.Events.Any(e => e.Id == sample.Id))
+        {
+            errors.Add($"Clap events: the saved event isn't listed ({host.Claps.Events.Events.Count} listed, folder {host.Claps.Events.Folder}).");
+        }
+
+        await Step("settings general clap events", GeneralPage.ShowClapEvents, () => host.SettingsWindowHandle, waitMs: 1500);
+
         DeviceEditorDialog? dialog = null;
         foreach (var (name, device) in new[] { ("device dialog", samples[0]), ("device dialog assistant", samples[^1]) })
         {
@@ -250,6 +261,47 @@ internal static class SmokeTest
         {
             host.Exit();
         }
+    }
+
+    /// <summary>Two claps heard, with the figures the detector would have saved (made up).</summary>
+    private static ClapEvent SampleClapEvent()
+    {
+        var time = DateTimeOffset.Now;
+        ClapSoundRecord Clap(long onset, double high, double body) => new()
+        {
+            Onset = onset,
+            Block = onset + 9,
+            Verdict = ClapVerdict.Clap,
+            High = high,
+            Low = high - 8,
+            Body = body,
+            BodyOverHigh = body - high,
+            HighOverLow = -3,
+            Drop = 9,
+            Peak = high - 62,
+            Rise = high - 4,
+            Detail = false,
+        };
+
+        return new ClapEvent
+        {
+            Id = $"{time:yyyyMMdd-HHmmss-fff}-smoke",
+            Time = time,
+            Kind = ClapEventKind.Heard,
+            Claps = 2,
+            Sensitivity = ClapSensitivity.Medium,
+            Counts = [2, 3],
+            Microphone = "Microphone (simulated)",
+            Raw = true,
+            Recording = new ClapRecording
+            {
+                SampleRate = 48000,
+                FromBlock = 0,
+                ToBlock = 400,
+                Sounds = [Clap(200, 38, 31), Clap(230, 35, 27)],
+                Patterns = [new ClapPatternRecord(300, 2, true)],
+            },
+        };
     }
 
     /// <summary>

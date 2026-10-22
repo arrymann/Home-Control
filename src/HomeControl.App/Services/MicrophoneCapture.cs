@@ -26,15 +26,22 @@ internal enum MicrophoneState
 }
 
 /// <summary>
+/// Where a clap event's figures come from: the detector's history (figures, no sound) and what
+/// it listened with.
+/// </summary>
+internal sealed record ClapSource(ClapHistory History, string Microphone, bool Raw, string Speakers, double SpeakerMargin);
+
+/// <summary>
 /// Opens the microphone (WASAPI, shared mode) and feeds it to a <see cref="ClapDetector"/>.
 /// </summary>
 /// <remarks>
 /// <para>
 /// No sound is kept. Windows hands over each packet in its own capture buffer; the detector
 /// reads it in place (a mixed-down copy, when one is needed, lives in a small stack buffer that
-/// is wiped) and the buffer goes back to Windows when the callback returns. Nothing is written
-/// to disk, logged or sent; only clap counts, and a few loudness figures about each sound the
-/// detector judged, leave this class.
+/// is wiped) and the buffer goes back to Windows when the callback returns. No sound is written
+/// to disk, logged or sent; only clap counts and the detector's own figures leave this class: a
+/// few loudness figures about each sound it judged, and its <see cref="ClapHistory"/> for clap
+/// events (loudness figures per 10 ms while it judged a sound, never the sound).
 /// </para>
 /// <para>
 /// All device work happens on one background loop, one step at a time; callbacks from Windows
@@ -49,7 +56,7 @@ internal sealed class MicrophoneCapture : IDisposable
     private const int RequestedSampleRate = 48000;
     private static readonly int[] RetrySeconds = [1, 2, 5, 10, 30, 60];
 
-    private readonly Action<int> _patternDetected;
+    private readonly Action<int, ClapSource> _patternDetected;
     private readonly Action _clapHeard;
     private readonly Action<ClapJudgement> _soundJudged;
     private readonly Channel<Func<Task>> _queue = Channel.CreateUnbounded<Func<Task>>(new UnboundedChannelOptions { SingleReader = true });
@@ -58,6 +65,8 @@ internal sealed class MicrophoneCapture : IDisposable
 
     // Read on the capture thread; set before a recorder starts (or swapped atomically).
     private volatile ClapDetector? _detector;
+    private volatile ClapSource? _source;       // the detector's history, for clap events
+    private Action<int>? _onPattern;            // the detector's pattern handler, to unhook
     private volatile SpeakerTaps? _speakerTaps; // read on the capture thread before each packet
     private PacketClock? _micClock;             // capture thread only (set before the recorder starts)
     private volatile int _sensitivity = (int)ClapSensitivity.Medium;
@@ -82,10 +91,10 @@ internal sealed class MicrophoneCapture : IDisposable
     private CancellationTokenSource? _retry;
     private MicrophoneState _reported = MicrophoneState.Off;
 
-    /// <param name="patternDetected">Claps in a row; called on the capture thread.</param>
+    /// <param name="patternDetected">Claps in a row, and the history to save them from; called on the capture thread.</param>
     /// <param name="clapHeard">A single clap; called on the capture thread.</param>
     /// <param name="soundJudged">What the detector made of each sound it judged (a few numbers, no sound); called on the capture thread.</param>
-    public MicrophoneCapture(Action<int> patternDetected, Action clapHeard, Action<ClapJudgement> soundJudged)
+    public MicrophoneCapture(Action<int, ClapSource> patternDetected, Action clapHeard, Action<ClapJudgement> soundJudged)
     {
         _patternDetected = patternDetected;
         _clapHeard = clapHeard;
@@ -96,6 +105,9 @@ internal sealed class MicrophoneCapture : IDisposable
 
     /// <summary>Raised on a background thread.</summary>
     public event Action<MicrophoneState, string?>? StateChanged;
+
+    /// <summary>While listening: the detector's history and what it listens with (any thread).</summary>
+    public ClapSource? Source => _source;
 
     /// <summary>Starts listening (or restarts on another microphone). Null: the default recording device.</summary>
     public void Start(string? deviceId, ClapSensitivity sensitivity, IReadOnlyList<int> counts)
@@ -411,12 +423,21 @@ internal sealed class MicrophoneCapture : IDisposable
                 Log.Info($"Ignoring claps played on: {speakers.Description}");
             }
 
-            var detector = new ClapDetector(waveFormat.SampleRate, (ClapSensitivity)_sensitivity) { Counts = _counts, Speakers = speakers.Sounds };
-            detector.PatternDetected += _patternDetected;
+            // What the detector works out (figures, no sound) is kept for the last half minute, for clap events.
+            var source = new ClapSource(new ClapHistory(), device.FriendlyName, raw, speakers.Description, speakers.Sounds.RiseMargin);
+            var detector = new ClapDetector(waveFormat.SampleRate, (ClapSensitivity)_sensitivity)
+            {
+                Counts = _counts,
+                Speakers = speakers.Sounds,
+                History = source.History,
+            };
+            _onPattern = claps => _patternDetected(claps, source);
+            detector.PatternDetected += _onPattern;
             detector.ClapHeard += _clapHeard;
             detector.SoundJudged += _soundJudged;
             _micClock = new PacketClock(waveFormat.SampleRate);
             _detector = detector;
+            _source = source;
             _reportedError = _reportedSpeakerError = false;
 
             recorder.DataAvailable += OnData;
@@ -725,10 +746,11 @@ internal sealed class MicrophoneCapture : IDisposable
     /// <summary>The capture thread has ended: drop the detector and wipe what it remembered.</summary>
     private void ForgetDetector()
     {
+        _source = null;
         if (_detector is { } detector)
         {
             _detector = null;
-            detector.PatternDetected -= _patternDetected;
+            detector.PatternDetected -= _onPattern;
             detector.ClapHeard -= _clapHeard;
             detector.SoundJudged -= _soundJudged;
             detector.Reset();
