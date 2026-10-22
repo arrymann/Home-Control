@@ -32,6 +32,14 @@ internal static class SmokeTest
             Directory.CreateDirectory(screenshotFolder);
         }
 
+        void ExpectPage(string page)
+        {
+            if (host.SettingsPage != page)
+            {
+                errors.Add($"Settings: opening {page} left the window on {host.SettingsPage ?? "no page"}.");
+            }
+        }
+
         async Task Step(string name, Action action, Func<IntPtr>? capture = null, int waitMs = 1500)
         {
             try
@@ -123,13 +131,17 @@ internal static class SmokeTest
         await Step("flyout dark", () => SetTheme(ThemePreference.Dark), () => host.PopupWindowHandle);
 
         await Step("settings devices dark", () => host.OpenSettings("devices"), () => host.SettingsWindowHandle, waitMs: 2500);
+        await ClickThroughPagesAsync(host, errors);
         await Step("settings scenes dark", () => host.OpenSettings("scenes"), () => host.SettingsWindowHandle, waitMs: 1500);
+        ExpectPage("scenes");
         await Step("settings account light", () =>
         {
             SetTheme(ThemePreference.Light);
             host.OpenSettings("account");
         }, () => host.SettingsWindowHandle);
+        ExpectPage("account");
         await Step("settings general light", () => host.OpenSettings("general"), () => host.SettingsWindowHandle);
+        ExpectPage("general");
 
         // Automations: the list, and the editor with every kind of node.
         var everything = new Automation { Name = "Every kind of node" };
@@ -177,6 +189,7 @@ internal static class SmokeTest
             SetTheme(ThemePreference.Dark);
             host.OpenSettings("automations");
         }, () => host.SettingsWindowHandle, waitMs: 2000);
+        ExpectPage("automations");
         await Step("automation editor dark", () => host.OpenAutomation(everything.Id), () => host.SettingsWindowHandle, waitMs: 2500);
         await Step("automation editor light", () => SetTheme(ThemePreference.Light), () => host.SettingsWindowHandle, waitMs: 1500);
         await Step("automation template editor", () => host.OpenAutomation(automations.Automations[0].Id), () => host.SettingsWindowHandle, waitMs: 2000);
@@ -236,6 +249,39 @@ internal static class SmokeTest
         finally
         {
             host.Exit();
+        }
+    }
+
+    /// <summary>
+    /// Clicks each entry of the settings pane with the real mouse, the way a person does, and
+    /// checks that its page opens: pages opened from code can work while clicks don't.
+    /// </summary>
+    private static async Task ClickThroughPagesAsync(AppHost host, List<string> errors)
+    {
+        foreach (var page in new[] { "scenes", "automations", "account", "general", "devices" })
+        {
+            try
+            {
+                if (host.SettingsItemCenter(page) is not { } center)
+                {
+                    errors.Add($"Clicking {page}: its entry in the pane isn't laid out.");
+                    continue;
+                }
+
+                NativeMethods.SetForegroundWindow(host.SettingsWindowHandle);
+                var under = await MouseInput.ClickAsync((int)center.X, (int)center.Y, host.SettingsWindowHandle);
+                await Task.Delay(1200);
+                var shown = host.SettingsPage;
+                Log.Info($"Smoke test: clicked {page} at {center.X:0},{center.Y:0} ({under}): the window shows {shown ?? "no page"}.");
+                if (shown != page)
+                {
+                    errors.Add($"Clicking {page} at {center.X:0},{center.Y:0} ({under}) left the window on {shown ?? "no page"}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Clicking {page}: {ex}");
+            }
         }
     }
 

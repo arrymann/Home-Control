@@ -41,6 +41,7 @@
                 IsBackButtonVisible="Collapsed"
                 IsPaneToggleButtonVisible="False"
                 IsSettingsVisible="False"
+                ItemInvoked="OnNavigationItemInvoked"
                 OpenPaneLength="220"
                 PaneDisplayMode="Left"
                 SelectionChanged="OnNavigationSelectionChanged">
@@ -72,7 +73,24 @@
                     </NavigationViewItem>
                 </NavigationView.MenuItems>
 
-                <Frame x:Name="ContentFrame" />
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <!-- A page that didn't open says why, instead of leaving the last one up without a word. -->
+                    <InfoBar
+                        x:Name="PageErrorBar"
+                        Margin="36,12,36,0"
+                        IsClosable="False"
+                        Severity="Error"
+                        Title="This page didn't open"
+                        Visibility="Collapsed" />
+                    <Frame
+                        x:Name="ContentFrame"
+                        Grid.Row="1"
+                        NavigationFailed="OnNavigationFailed" />
+                </Grid>
             </NavigationView>
         </Grid>
     </Grid>

@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.UI.Xaml.Navigation;
 using Windows.Graphics;
 
 namespace HomeControl.Views;
@@ -14,9 +15,18 @@ namespace HomeControl.Views;
 /// <summary>Windows 11 style settings window: Mica, custom title bar and a navigation pane.</summary>
 public sealed partial class SettingsWindow : Window
 {
+    private static readonly (string Tag, Type Type)[] Pages =
+    [
+        ("devices", typeof(DevicesPage)),
+        ("scenes", typeof(ScenesPage)),
+        ("automations", typeof(AutomationsPage)),
+        ("account", typeof(AccountPage)),
+        ("general", typeof(GeneralPage)),
+    ];
+
     private readonly IntPtr _hwnd;
     private BackdropKind? _backdrop;
-    private string? _currentPage;
+    private Exception? _navigationError;
 
     public SettingsWindow()
     {
@@ -61,22 +71,38 @@ public sealed partial class SettingsWindow : Window
             presenter.Restore();
         }
 
-        Navigate(page ?? _currentPage ?? "devices");
+        Navigate(page ?? CurrentPage ?? "devices");
         AppWindow.Show();
         Activate();
         NativeMethods.SetForegroundWindow(_hwnd);
     }
 
+    /// <summary>The page shown ("devices", "scenes"…): what the frame holds, not what was last asked for.</summary>
+    internal string? CurrentPage => Pages.FirstOrDefault(p => p.Type == ContentFrame.Content?.GetType()).Tag;
+
     public void Navigate(string page)
     {
-        foreach (var item in Navigation.MenuItems.OfType<NavigationViewItem>())
+        if (ItemFor(page) is not { } item)
         {
-            if (item.Tag as string == page)
-            {
-                Navigation.SelectedItem = item; // raises SelectionChanged
-                return;
-            }
+            return;
         }
+
+        Navigation.SelectedItem = item; // raises SelectionChanged when the selection changes
+        Open(page);                     // and when it doesn't, the page must still be the one shown
+    }
+
+    /// <summary>Where a page's entry in the navigation pane is, in screen pixels (for the smoke test's clicks).</summary>
+    internal Windows.Foundation.Point? ItemCenterOnScreen(string page)
+    {
+        if (ItemFor(page) is not { ActualWidth: > 0 } item || Content.XamlRoot is not { } root)
+        {
+            return null;
+        }
+
+        var center = item.TransformToVisual(null).TransformPoint(new Windows.Foundation.Point(item.ActualWidth / 2, item.ActualHeight / 2));
+        var point = new NativeMethods.POINT { X = (int)Math.Round(center.X * root.RasterizationScale), Y = (int)Math.Round(center.Y * root.RasterizationScale) };
+        NativeMethods.ClientToScreen(_hwnd, ref point);
+        return new Windows.Foundation.Point(point.X, point.Y);
     }
 
     internal void ApplyAppearance(ElementTheme theme, BackdropKind backdrop)
@@ -96,24 +122,81 @@ public sealed partial class SettingsWindow : Window
         SolidBackground.Visibility = SystemBackdrop is null ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    private NavigationViewItem? ItemFor(string page) =>
+        Navigation.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(i => i.Tag as string == page);
+
     private void OnNavigationSelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
-        var page = (args.SelectedItem as NavigationViewItem)?.Tag as string;
-        if (page is null || page == _currentPage)
+        if ((args.SelectedItem as NavigationViewItem)?.Tag is string page)
+        {
+            Open(page);
+        }
+    }
+
+    /// <summary>Every click opens its page, also on the entry that is already selected.</summary>
+    private void OnNavigationItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
+    {
+        if ((args.InvokedItemContainer as NavigationViewItem)?.Tag is string page)
+        {
+            Open(page);
+        }
+    }
+
+    private void OnNavigationFailed(object sender, NavigationFailedEventArgs e)
+    {
+        _navigationError = e.Exception;
+        e.Handled = true; // Open reports it
+    }
+
+    /// <summary>
+    /// Shows a page unless it is shown already. When it can't be shown, says so on the window
+    /// and in the log, and the pane goes back to the page that is still up, so every entry can
+    /// be clicked again.
+    /// </summary>
+    private void Open(string page)
+    {
+        var type = Pages.FirstOrDefault(p => p.Tag == page).Type;
+        if (type is null || ContentFrame.Content?.GetType() == type)
         {
             return;
         }
 
-        var pageType = page switch
+        _navigationError = null;
+        try
         {
-            "account" => typeof(AccountPage),
-            "scenes" => typeof(ScenesPage),
-            "automations" => typeof(AutomationsPage),
-            "general" => typeof(GeneralPage),
-            _ => typeof(DevicesPage),
-        };
+            ContentFrame.Navigate(type, null, new EntranceNavigationTransitionInfo());
+        }
+        catch (Exception ex)
+        {
+            _navigationError = ex;
+        }
 
-        _currentPage = page;
-        ContentFrame.Navigate(pageType, null, new EntranceNavigationTransitionInfo());
+        var shown = ContentFrame.Content?.GetType() == type;
+        if (shown && _navigationError is null)
+        {
+            PageErrorBar.IsOpen = false;
+            PageErrorBar.Visibility = Visibility.Collapsed; // and its margin with it
+            return;
+        }
+
+        var error = _navigationError ?? new InvalidOperationException("The frame didn't show it.");
+        Log.Error($"Opening the {page} page", error);
+        var name = ItemFor(page)?.Content as string ?? page;
+        PageErrorBar.Title = shown ? $"Part of {name} didn't load" : $"{name} didn't open";
+        PageErrorBar.Message = $"{error.GetType().Name}: {error.Message} (0x{error.HResult:X8}). It's in the log too: General › Data folder › home-control.log.";
+        PageErrorBar.Visibility = Visibility.Visible;
+        PageErrorBar.IsOpen = true;
+
+        if (!shown)
+        {
+            // Not from inside the pane's own selection change.
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (CurrentPage is { } current && ItemFor(current) is { } item && !ReferenceEquals(Navigation.SelectedItem, item))
+                {
+                    Navigation.SelectedItem = item;
+                }
+            });
+        }
     }
 }

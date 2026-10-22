@@ -90,6 +90,12 @@ internal sealed class AppHost
 
     internal IntPtr SignInWindowHandle => _signInWindow is null ? IntPtr.Zero : WindowHelpers.GetHandle(_signInWindow);
 
+    /// <summary>The settings page shown ("devices", "scenes"…), or null when the window is closed (smoke test).</summary>
+    internal string? SettingsPage => _settingsWindow?.CurrentPage;
+
+    /// <summary>Where a page's entry in the settings pane is on screen (smoke test).</summary>
+    internal Windows.Foundation.Point? SettingsItemCenter(string page) => _settingsWindow?.ItemCenterOnScreen(page);
+
     internal string DescribeSignInWindow() => _signInWindow?.DescribeForTest() ?? "closed";
 
     /// <summary>Raised after settings were saved and applied.</summary>
