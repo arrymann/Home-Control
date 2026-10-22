@@ -138,6 +138,7 @@ public sealed partial class SettingsWindow : Window
     {
         if ((args.InvokedItemContainer as NavigationViewItem)?.Tag is string page)
         {
+            Log.Info($"Settings: {page} clicked (showing {CurrentPage ?? "nothing"}).");
             Open(page);
         }
     }
@@ -164,7 +165,9 @@ public sealed partial class SettingsWindow : Window
         _navigationError = null;
         try
         {
-            ContentFrame.Navigate(type, null, new EntranceNavigationTransitionInfo());
+            // No page animation: the page is up the moment the frame has it, whatever the
+            // composition engine does.
+            ContentFrame.Navigate(type, null, new SuppressNavigationTransitionInfo());
         }
         catch (Exception ex)
         {
