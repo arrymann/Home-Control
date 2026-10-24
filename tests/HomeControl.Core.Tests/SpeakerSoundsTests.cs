@@ -157,8 +157,8 @@ public class SpeakerSoundsTests
     public void A_clap_from_the_speakers_among_the_users_claps_spoils_them()
     {
         // The user claps twice; a video claps in between: never three claps, nor a clean pair.
-        var played = new ClapSignals(48000, 4, seed: 11, room: false).AddClap(1.15, -10);
-        var mic = new ClapSignals(48000, 4, seed: 7).AddClaps(1.0, 0.3, 2).AddPlayed(played, 0.02);
+        var played = new ClapSignals(48000, 4, seed: 11, room: false).AddClap(1.2, -10);
+        var mic = new ClapSignals(48000, 4, seed: 7).AddClaps(1.0, 0.44, 2).AddPlayed(played, 0.02);
 
         Assert.Equal([3], Listen(mic, played, counts: [2, 3], useSpeakers: false).Patterns);
         Assert.Empty(Listen(mic, played, counts: [2, 3]).Patterns);

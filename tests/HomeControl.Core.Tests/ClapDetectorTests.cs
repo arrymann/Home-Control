@@ -44,7 +44,7 @@ public class ClapDetectorTests
 
     [Theory]
     [InlineData(new[] { 2 }, 0.40, 0.55)]     // the largest count: a short closing window
-    [InlineData(new[] { 2, 3 }, 0.55, 0.65)]  // a third clap could still come
+    [InlineData(new[] { 2, 3 }, 0.50, 0.60)]  // a third clap could still come
     public void Hears_two_claps_once_they_are_over(int[] counts, double soonest, double latest)
     {
         ForEachRate(rate =>
@@ -72,8 +72,8 @@ public class ClapDetectorTests
     }
 
     [Theory]
-    [InlineData(0.15, -20)] // quick
-    [InlineData(0.58, -20)] // slow
+    [InlineData(0.21, -20)] // quick
+    [InlineData(0.48, -20)] // slow
     [InlineData(0.30, -35)] // quiet
     [InlineData(0.30, -3)]  // very loud
     public void Hears_claps_at_any_reasonable_pace_and_level(double gap, double level)
@@ -105,6 +105,24 @@ public class ClapDetectorTests
     }
 
     [Fact]
+    public void Hears_a_loud_clap_right_next_to_the_microphone()
+    {
+        // Its room tail is far below the clap, so it drops a little faster than claps further
+        // away may, but the tail is still loud: not a click.
+        ForEachRate(rate =>
+        {
+            foreach (var sensitivity in AllSensitivities)
+            {
+                var signal = new ClapSignals(rate, 3)
+                    .AddClap(1.0, -3, direct: 0.003, reverb: 0.04)
+                    .AddClap(1.3, -3, direct: 0.003, reverb: 0.04);
+
+                Assert.Equal([2], Listen(signal, [2], sensitivity).Patterns.Select(p => p.Count));
+            }
+        });
+    }
+
+    [Fact]
     public void Hears_claps_over_a_fan_over_music_and_after_talking()
     {
         ForEachRate(rate =>
@@ -128,8 +146,9 @@ public class ClapDetectorTests
         {
             foreach (var sensitivity in AllSensitivities)
             {
-                // Two claps too close together, then a proper pair a second later.
-                var signal = new ClapSignals(rate, 5).AddClap(1.0).AddClap(1.08).AddClaps(2.0, 0.3, 2);
+                // Two claps too close together, then a proper pair a little over a second later
+                // (sooner, the fumbled claps are sharp sounds just before it, which make it doubtful).
+                var signal = new ClapSignals(rate, 5).AddClap(1.0).AddClap(1.08).AddClaps(2.2, 0.3, 2);
 
                 Assert.Equal([2], Listen(signal, [2], sensitivity).Patterns.Select(p => p.Count));
             }
@@ -214,9 +233,11 @@ public class ClapDetectorTests
     [InlineData(new[] { 0.0, 0.2, 0.4, 0.6, 0.8 }, new[] { 2, 3, 4 })] // five claps: too many
     [InlineData(new[] { 0.0, 0.3, 0.6 }, new[] { 2 })]                  // three when only two are used
     [InlineData(new[] { 0.0, 0.1 }, new[] { 2 })]                       // too close together
+    [InlineData(new[] { 0.0, 0.15 }, new[] { 2 })]                      // quicker than deliberate claps (a bounce, a double click)
+    [InlineData(new[] { 0.0, 0.6 }, new[] { 2 })]                       // slower than deliberate claps
     [InlineData(new[] { 0.0, 0.8 }, new[] { 2 })]                       // too far apart
-    [InlineData(new[] { 0.0, 0.15, 0.65 }, new[] { 3 })]                // no steady rhythm
-    [InlineData(new[] { 0.0, 0.5, 0.7 }, new[] { 3 })]                  // slowing down then rushing
+    [InlineData(new[] { 0.0, 0.22, 0.7 }, new[] { 3 })]                 // no steady rhythm
+    [InlineData(new[] { 0.0, 0.45, 0.68 }, new[] { 3 })]                // slowing down then rushing
     [InlineData(new[] { 0.0, 0.7, 1.0 }, new[] { 2 })]                  // a stray clap just before
     public void Wrong_patterns_are_ignored(double[] times, int[] counts)
     {
@@ -264,6 +285,41 @@ public class ClapDetectorTests
 
                 Assert.Empty(heard.Patterns);
                 Assert.Equal(0, heard.Claps);
+            }
+        });
+    }
+
+    [Fact]
+    public void Claps_just_after_another_sharp_sound_as_loud_are_doubtful()
+    {
+        // Deliberate claps stand out: half a second after a click about as loud, they may be
+        // typing or tidying up. A far quieter click, or one over a second before, doesn't matter.
+        ForEachRate(rate =>
+        {
+            foreach (var sensitivity in AllSensitivities)
+            {
+                var afterLoud = new ClapSignals(rate, 3).AddClick(0.5, -10).AddClaps(1.0, 0.3, 2);
+                var afterQuiet = new ClapSignals(rate, 3).AddClick(0.5, -25).AddClaps(1.0, 0.3, 2);
+                var aWhileAfter = new ClapSignals(rate, 4).AddClick(0.5, -10).AddClaps(1.7, 0.3, 2);
+
+                Assert.Empty(Listen(afterLoud, [2], sensitivity).Patterns);
+                Assert.Equal([2], Listen(afterQuiet, [2], sensitivity).Patterns.Select(p => p.Count));
+                Assert.Equal([2], Listen(aWhileAfter, [2], sensitivity).Patterns.Select(p => p.Count));
+            }
+        });
+    }
+
+    [Fact]
+    public void Talking_far_quieter_than_the_claps_doesnt_stop_them()
+    {
+        // Talking about as loud as the claps does (see below); talking in the background doesn't.
+        ForEachRate(rate =>
+        {
+            foreach (var sensitivity in AllSensitivities)
+            {
+                var signal = new ClapSignals(rate, 4).AddSpeech(0.8, 1.85, -35).AddClaps(1.9, 0.3, 2, -10);
+
+                Assert.Equal([2], Listen(signal, [2], sensitivity).Patterns.Select(p => p.Count));
             }
         });
     }

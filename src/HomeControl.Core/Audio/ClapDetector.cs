@@ -115,16 +115,17 @@ public readonly record struct ClapDetectorState(
 /// taps and a machine's ticks (a 3D printer's) are only high-pitched. The balances between bands
 /// are of the sound's own energy, with the room's share taken out, so a loud hum or whine
 /// doesn't make claps look dull or bodiless.
-/// Claps in a row are 120–600 ms apart in a steady rhythm (no gap over 1.75 times another). A
+/// Claps in a row are 200–500 ms apart in a steady rhythm (no gap over 1.75 times another). A
 /// sequence starts only after 0.8 s without claps (or right after a finished sequence, so a
-/// pattern can be repeated) and 0.3 s without other sounds, any other sound that stands out
-/// during it cancels it, and it is reported once it is clearly over, so three claps never also
-/// count as two (a clap too late for the rhythm ends the sequence and may start the next). A try
-/// that was blocked but was a whole pair lets the next try follow straight away. Sounds that
-/// don't stand out from the room, faint high ticks (the low band hardly rises and the high band
-/// stays 10 dB or more below the claps) and sounds with no body that stay a few dB below the
-/// claps don't count as other sounds; voices, music, knocks and anything about as loud as the
-/// claps do.
+/// pattern can be repeated), 0.3 s without other sounds and a second without other sharp
+/// sounds within 12 dB of its first clap (taps, clicks, things put down: deliberate claps stand
+/// out), any other sound that stands out during it cancels it, and it is reported once it is
+/// clearly over, so three claps never also count as two (a clap too late for the rhythm ends
+/// the sequence and may start the next). A try that was blocked but was a whole pair lets the
+/// next try follow straight away. Sounds that don't stand out from the room, faint high ticks
+/// (the low band hardly rises and the high band stays 10 dB or more below the claps), sounds
+/// with no body that stay a few dB below the claps, and voices, music or knocks 18 dB or more
+/// below them don't count as other sounds; anything louder does.
 /// </para>
 /// <para>
 /// A clap that starts when a sound from the PC's own speakers may be reaching the microphone,
@@ -147,10 +148,15 @@ public sealed class ClapDetector
     private const double SilentEnergy = 1e-15; // -150 dB: no microphone is this quiet, only digital silence
     private const double HoldSeconds = 0.08;
     private const double TailCheckSeconds = 0.04;
-    private const double MinGap = 0.12;
-    private const double MaxGap = 0.60;
+    private const double MinGap = 0.20;    // s: claps in a row are this far apart at least (quicker: a bounce, a double click) ...
+    private const double MaxGap = 0.50;    // ... and at most (slower: two sounds, not a double clap)
     private const double MaxRhythmRatio = 1.75;
     private const double NoiseGuard = 0.30;
+    private const double BusySeconds = 1.0;    // s: a sharp sound this little before a clap ...
+    private const double BusyBelowClaps = 12;  // dB: ... and no further below it than this makes it doubtful (taps, clicks, things put down)
+    private const double SoundBelowClaps = 18; // dB: a sound with a low part (speech, music, a knock) this far below the claps doesn't count
+    private const double DryTail = 8;          // dB: a sound that drops very fast is still a clap if its tail stays this loud ...
+    private const double DryDropMargin = 4;    // dB: ... and it drops no more than this much faster than a clap may
     private const double ClapGuard = 0.80;
     private const double ClosingQuiet = 0.25;
     private const double OnsetSeconds = 0.04;  // a sound may still grow this long after it starts
@@ -224,8 +230,10 @@ public sealed class ClapDetector
     private double _quietestClap;
     private double _previousClap;
     private double _lastNoise;
+    private double _lastSoundLevel;
     private double _lastTick;
     private double _lastTickHigh;
+    private RecentImpulses _impulses;
     private double _lockedUntil;
     private int _blockedClaps;
     private double _blockedLast;
@@ -382,8 +390,9 @@ public sealed class ClapDetector
         _peakHigh = _peakLow = _peakBody = _onsetReference = 0;
         _drop = double.NaN;
         _claps = 0;
-        _lastClap = _shortestGap = _longestGap = _quietestClap = _lastTickHigh = 0;
+        _lastClap = _shortestGap = _longestGap = _quietestClap = _lastTickHigh = _lastSoundLevel = 0;
         _previousClap = _lastNoise = _lastTick = _lockedUntil = _blockedLast = double.NegativeInfinity;
+        _impulses = RecentImpulses.None;
         _blockedClaps = 0;
     }
 
@@ -585,7 +594,10 @@ public sealed class ClapDetector
                 return;
             }
 
-            if (high - _floorHigh < t.MinTail || _drop > t.MaxDrop)
+            // A sharp drop alone isn't a click: a loud clap close to the microphone drops a little
+            // faster than a clap may, but its room tail stays well above the background.
+            var dry = _drop > t.MaxDrop && (high - _floorHigh < DryTail || _drop > t.MaxDrop + DryDropMargin);
+            if (high - _floorHigh < t.MinTail || dry)
             {
                 Reject(t, ClapVerdict.NoRoomTail); // a keyboard or mouse click
                 return;
@@ -660,15 +672,30 @@ public sealed class ClapDetector
     {
         _tracking = false;
         Judged(why);
-        var time = _onsetBlock * _blockSeconds;
+        Rejected(t, why, _onsetBlock * _blockSeconds, _peakHigh - _floorHigh, _peakLow - _floorLow);
+    }
 
+    /// <summary>
+    /// What a sound that isn't a clap does to claps in a row, from its verdict and how far its
+    /// high band and the band below 2 kHz rose over the background (dB).
+    /// </summary>
+    private void Rejected(Thresholds t, ClapVerdict why, double time, double high, double low)
+    {
         // Anything with a low part (a knock, a thump) always counts; the tick rules in Noise
         // decide about the rest. A sound with no body is a tick whatever its low band did, and
         // has to be about as loud as the claps to spoil them.
-        var stoodOut = _peakHigh - _floorHigh >= t.AboveFloor || _peakLow - _floorLow >= TickLowRise;
-        if (stoodOut)
+        if (high >= t.AboveFloor || low >= TickLowRise)
         {
-            Noise(time, _peakHigh - _floorHigh, _peakLow - _floorLow, faint: why == ClapVerdict.NoBody);
+            Noise(time, high, low, faint: why == ClapVerdict.NoBody);
+        }
+
+        // Any sharp sound (a tap, a click, something put down; not speech or music, nor what the
+        // speakers played) is remembered for a moment, quiet or not: claps among sounds like them
+        // are doubtful. One with no body has to be about as loud as the claps to count.
+        if (why is not (ClapVerdict.RoseAgain or ClapVerdict.Sustained or ClapVerdict.FromSpeakers))
+        {
+            var level = Math.Max(high, low);
+            _impulses.Add(time, why == ClapVerdict.NoBody ? level - (BusyBelowClaps - FaintBelowClaps) : level);
         }
     }
 
@@ -722,11 +749,16 @@ public sealed class ClapDetector
             return false;
         }
 
+        // Deliberate claps stand out: a sharp sound in the second before, not far below this clap,
+        // makes it one of many such sounds (typing, tidying up, a machine), not a clap. For the
+        // next claps, only the sounds since the last one count: those before it were weighed then.
+        var busy = _impulses.Loudest(_claps == 0 ? time - BusySeconds : _lastClap + _blockSeconds / 2) >= level - BusyBelowClaps;
         if (_claps == 0)
         {
             // Only after a quiet moment, so the middle of applause or chatter doesn't start one.
-            var noisy = time - _lastNoise < NoiseGuard || (time - _lastTick < NoiseGuard && _lastTickHigh > level - TickBelowClaps);
-            if (noisy || time - previous < ClapGuard)
+            var noisy = (time - _lastNoise < NoiseGuard && _lastSoundLevel > level - SoundBelowClaps)
+                        || (time - _lastTick < NoiseGuard && _lastTickHigh > level - TickBelowClaps);
+            if (noisy || busy || time - previous < ClapGuard)
             {
                 _lockedUntil = time + MaxGap;
                 Blocked(time);
@@ -743,7 +775,7 @@ public sealed class ClapDetector
         }
 
         var gap = time - _lastClap;
-        if (gap < MinGap || gap > MaxGap || _claps >= Largest())
+        if (!InStep(gap) || _claps >= Largest() || busy)
         {
             Cancel(time);
             return false;
@@ -773,6 +805,10 @@ public sealed class ClapDetector
         var sound = !faint && low >= TickLowRise;
         if (sound)
         {
+            // Speech, music, a knock: it counts unless it is far quieter than the claps (music
+            // playing softly doesn't stop them), so remember the loudest of the last few.
+            var loudness = Math.Max(high, low);
+            _lastSoundLevel = time - _lastNoise < NoiseGuard ? Math.Max(_lastSoundLevel, loudness) : loudness;
             _lastNoise = time;
         }
         else
@@ -788,11 +824,14 @@ public sealed class ClapDetector
             _lastTick = time;
         }
 
-        if (_claps > 0 && (sound || high > _quietestClap - TickBelowClaps))
+        if (_claps > 0 && (sound ? Math.Max(high, low) > _quietestClap - SoundBelowClaps : high > _quietestClap - TickBelowClaps))
         {
             Cancel(time);
         }
     }
+
+    /// <summary>Whether claps this far apart can be claps in a row (to the nearest half block: times come in 10 ms blocks).</summary>
+    private bool InStep(double gap) => gap >= MinGap - _blockSeconds / 2 && gap <= MaxGap + _blockSeconds / 2;
 
     private void Cancel(double time)
     {
@@ -804,7 +843,7 @@ public sealed class ClapDetector
     private void Blocked(double time)
     {
         var gap = time - _blockedLast;
-        _blockedClaps = gap >= MinGap && gap <= MaxGap ? _blockedClaps + 1 : 1;
+        _blockedClaps = InStep(gap) ? _blockedClaps + 1 : 1;
         _blockedLast = time;
     }
 
@@ -938,11 +977,7 @@ public sealed class ClapDetector
 
         _history?.Judged(onsetBlock, _block, judgement, lowRise, null);
         SoundJudged?.Invoke(judgement);
-        var t = _thresholds;
-        if (judgement.High >= t.AboveFloor || lowRise >= TickLowRise)
-        {
-            Noise(time, judgement.High, lowRise, faint: judgement.Verdict == ClapVerdict.NoBody);
-        }
+        Rejected(_thresholds, judgement.Verdict, time, judgement.High, lowRise);
     }
 
     /// <summary>Replays: a rise of the low band alone at this block (speech, a knock), whose blocks weren't kept.</summary>
@@ -991,6 +1026,43 @@ public sealed class ClapDetector
             ClapSensitivity.High => HighSensitivity,
             _ => MediumSensitivity,
         };
+    }
+
+    /// <summary>
+    /// The last four sharp sounds that weren't claps: when (s) and how loud (dB over the
+    /// background). Single numbers only, like everything else the detector keeps.
+    /// </summary>
+    internal struct RecentImpulses
+    {
+        public static readonly RecentImpulses None = new()
+        {
+            _time0 = double.NegativeInfinity,
+            _time1 = double.NegativeInfinity,
+            _time2 = double.NegativeInfinity,
+            _time3 = double.NegativeInfinity,
+        };
+
+        private double _time0, _time1, _time2, _time3;
+        private double _level0, _level1, _level2, _level3;
+        private int _next;
+
+        public void Add(double time, double level)
+        {
+            switch (_next)
+            {
+                case 0: (_time0, _level0) = (time, level); break;
+                case 1: (_time1, _level1) = (time, level); break;
+                case 2: (_time2, _level2) = (time, level); break;
+                default: (_time3, _level3) = (time, level); break;
+            }
+
+            _next = (_next + 1) % 4;
+        }
+
+        /// <summary>The loudest since <paramref name="from"/>; minus infinity if none.</summary>
+        public readonly double Loudest(double from) => Math.Max(
+            Math.Max(_time0 >= from ? _level0 : double.NegativeInfinity, _time1 >= from ? _level1 : double.NegativeInfinity),
+            Math.Max(_time2 >= from ? _level2 : double.NegativeInfinity, _time3 >= from ? _level3 : double.NegativeInfinity));
     }
 
     /// <summary>A second-order Butterworth filter (RBJ cookbook, transposed direct form II).</summary>

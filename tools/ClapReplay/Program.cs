@@ -56,9 +56,10 @@ foreach (var clapEvent in events)
     var then = recording.Patterns.Where(p => p.Reported).ToList();
     var now = replay.Reported.Where(p => p.Block >= recording.FromBlock && p.Block <= recording.ToBlock).ToList();
 
-    // The claps the event is about: the pattern it saved (Heard), or any in the time before (Missed).
+    // The claps the event is about: the pattern it saved (Heard), or one it didn't hear then (Missed).
+    bool Matches(ClapPatternRecord a, ClapPatternRecord b) => a.Claps == b.Claps && Math.Abs(a.Block - b.Block) <= 50;
     var own = clapEvent.Kind == ClapEventKind.Heard ? then.LastOrDefault(p => p.Claps == clapEvent.Claps) : null;
-    var heardNow = own is null ? now.Count > 0 : now.Any(p => p.Claps == own.Claps && Math.Abs(p.Block - own.Block) <= 50);
+    var heardNow = own is null ? now.Any(p => !then.Any(t => Matches(p, t))) : now.Any(p => Matches(p, own));
     var outcome = (clapEvent.Flag, clapEvent.Kind) switch
     {
         (ClapEventFlag.NotClaps, _) => heardNow ? "still heard: still wrong" : "no longer heard: fixed",
