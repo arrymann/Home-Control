@@ -86,7 +86,9 @@ public static class AutomationGraph
     }
 
     /// <summary>Problems worth showing in the editor and the automation list.</summary>
-    public static IReadOnlyList<AutomationIssue> Validate(Automation automation, ISet<string> deviceIds, bool hasLocation)
+    /// <param name="deviceIds">The devices there are.</param>
+    /// <param name="sceneIds">The scenes there are.</param>
+    public static IReadOnlyList<AutomationIssue> Validate(Automation automation, ISet<string> deviceIds, ISet<string> sceneIds, bool hasLocation)
     {
         var issues = new List<AutomationIssue>();
         var triggers = automation.Nodes.Where(n => n.Category == NodeCategory.Trigger).ToList();
@@ -123,6 +125,18 @@ public static class AutomationGraph
                 issues.Add(new(IssueSeverity.Error, $"The device of “{NodeText.Title(node)}” was removed. Pick another one.", node.Id));
             }
 
+            if (node is SceneActionNode { SceneId: var sceneId })
+            {
+                if (sceneId is null)
+                {
+                    issues.Add(new(IssueSeverity.Error, $"Pick a scene for “{NodeText.Title(node)}”.", node.Id));
+                }
+                else if (!sceneIds.Contains(sceneId))
+                {
+                    issues.Add(new(IssueSeverity.Error, $"The scene of “{NodeText.Title(node)}” was removed. Pick another one.", node.Id));
+                }
+            }
+
             if (!hasLocation && UsesSun(node))
             {
                 issues.Add(new(IssueSeverity.Error, "Set your location (above the automation list) for sunrise, sunset and twilight.", node.Id));
@@ -152,7 +166,9 @@ public static class AutomationGraph
     }
 
     /// <summary>"When sunset, PC shuts down → Turn on Backlight, Turn every device off".</summary>
-    public static string Summarize(Automation automation, Func<string?, string?> deviceName)
+    /// <param name="deviceName">A device's label by its id; null when there is no such device.</param>
+    /// <param name="sceneName">... a scene's name.</param>
+    public static string Summarize(Automation automation, Func<string?, string?> deviceName, Func<string?, string?> sceneName)
     {
         var triggers = automation.Nodes.Where(n => n.Category == NodeCategory.Trigger).OrderBy(n => n.Y).ToList();
         if (triggers.Count == 0)
@@ -165,12 +181,12 @@ public static class AutomationGraph
             .Where(n => n.Category == NodeCategory.Action && reachable.Contains(n.Id))
             .OrderBy(n => n.X)
             .ThenBy(n => n.Y)
-            .Select(n => NodeText.Describe(n, deviceName))
+            .Select(n => NodeText.Describe(n, deviceName, sceneName))
             .Distinct()
             .ToList();
         var conditions = automation.Nodes.Any(n => n.Category == NodeCategory.Condition && reachable.Contains(n.Id));
 
-        var when = string.Join("; ", triggers.Select(t => NodeText.Describe(t, deviceName)));
+        var when = string.Join("; ", triggers.Select(t => NodeText.Describe(t, deviceName, sceneName)));
         var then = actions.Count == 0 ? "nothing yet" : string.Join(", ", actions.Take(3)) + (actions.Count > 3 ? $" (+{actions.Count - 3})" : string.Empty);
         return $"{when} → {(conditions ? "if… " : string.Empty)}{then}";
     }

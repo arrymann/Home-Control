@@ -24,6 +24,11 @@ internal sealed class FakeAutomationHost : IAutomationHost
         ["desk"] = ("Desk", true),
     };
 
+    public Dictionary<string, (string Name, string[] DeviceIds)> Scenes { get; } = new()
+    {
+        ["evening"] = ("Evening", ["lamp", "desk"]),
+    };
+
     /// <summary>Exceptions to throw from the next SetDeviceAsync calls, in order.</summary>
     public Queue<Exception> Failures { get; } = new();
 
@@ -45,6 +50,10 @@ internal sealed class FakeAutomationHost : IAutomationHost
     public PcStatus GetPcStatus() => Status;
 
     public string? GetDeviceName(string? deviceId) => deviceId is not null && Devices.TryGetValue(deviceId, out var d) ? d.Name : null;
+
+    public string? GetSceneName(string? sceneId) => sceneId is not null && Scenes.TryGetValue(sceneId, out var s) ? s.Name : null;
+
+    public IReadOnlyList<string>? GetSceneDevices(string sceneId) => Scenes.TryGetValue(sceneId, out var s) ? s.DeviceIds : null;
 
     /// <summary>When set, reading this device's state throws it.</summary>
     public (string DeviceId, Exception Error)? StateFailure { get; set; }
@@ -310,11 +319,12 @@ public class AutomationGraphTests
     {
         var automation = new Automation();
         var devices = new HashSet<string> { "lamp" };
-        Assert.Contains(AutomationGraph.Validate(automation, devices, hasLocation: true), i => i.Message.Contains("Add a trigger"));
+        var scenes = new HashSet<string> { "evening" };
+        Assert.Contains(AutomationGraph.Validate(automation, devices, scenes, hasLocation: true), i => i.Message.Contains("Add a trigger"));
 
         var trigger = automation.Add(new TimeTriggerNode { At = new TimePoint { Reference = TimeReference.Sunset } });
         var unwired = automation.Add(new DeviceActionNode { DeviceId = "lamp" });
-        var issues = AutomationGraph.Validate(automation, devices, hasLocation: false);
+        var issues = AutomationGraph.Validate(automation, devices, scenes, hasLocation: false);
         Assert.Contains(issues, i => i.Message.Contains("Connect an action"));
         Assert.Contains(issues, i => i.NodeId == unwired.Id && i.Severity == IssueSeverity.Warning);
         Assert.Contains(issues, i => i.NodeId == trigger.Id && i.Message.Contains("location"));
@@ -324,10 +334,19 @@ public class AutomationGraphTests
         automation.Wire(trigger, gone);
         var none = automation.Add(new DeviceStateConditionNode());
         automation.Wire(trigger, none);
-        issues = AutomationGraph.Validate(automation, devices, hasLocation: true);
+        var scene = automation.Add(new SceneActionNode { SceneId = "evening" });
+        var goneScene = automation.Add(new SceneActionNode { SceneId = "removed" });
+        var noScene = automation.Add(new SceneActionNode());
+        automation.Wire(trigger, scene);
+        automation.Wire(trigger, goneScene);
+        automation.Wire(trigger, noScene);
+        issues = AutomationGraph.Validate(automation, devices, scenes, hasLocation: true);
         Assert.Contains(issues, i => i.NodeId == gone.Id && i.Message.Contains("removed"));
         Assert.Contains(issues, i => i.NodeId == none.Id && i.Message.Contains("Pick a device"));
+        Assert.Contains(issues, i => i.NodeId == goneScene.Id && i.Message.Contains("scene") && i.Message.Contains("removed"));
+        Assert.Contains(issues, i => i.NodeId == noScene.Id && i.Message.Contains("Pick a scene"));
         Assert.DoesNotContain(issues, i => i.NodeId == unwired.Id);
+        Assert.DoesNotContain(issues, i => i.NodeId == scene.Id);
     }
 
     [Fact]
@@ -335,14 +354,20 @@ public class AutomationGraphTests
     {
         var automation = AutomationTemplates.Create(AutomationTemplate.LightsAtSunset, [new DeviceConfig { Id = "lamp", Name = "Lamp" }]);
 
-        var summary = AutomationGraph.Summarize(automation, id => id == "lamp" ? "Lamp" : null);
+        var summary = AutomationGraph.Summarize(automation, id => id == "lamp" ? "Lamp" : null, _ => null);
 
         Assert.Equal("15 min before sunset → Turn on Lamp", summary);
 
         var claps = new Automation();
         claps.Wire(claps.Add(new ClapTriggerNode { Count = 3 }), claps.Add(new DeviceActionNode { DeviceId = "lamp", Command = DeviceCommand.Toggle }));
-        Assert.Equal("When you clap 3 times → Toggle Lamp", AutomationGraph.Summarize(claps, id => id == "lamp" ? "Lamp" : null));
+        Assert.Equal("When you clap 3 times → Toggle Lamp", AutomationGraph.Summarize(claps, id => id == "lamp" ? "Lamp" : null, _ => null));
         Assert.Equal("Claps", NodeText.Title(claps.Nodes[0]));
+
+        var scene = new Automation();
+        scene.Wire(scene.Add(new ClapTriggerNode()), scene.Add(new SceneActionNode { SceneId = "evening", Command = DeviceCommand.Toggle }));
+        Assert.Equal("When you clap 2 times → Toggle the scene Evening", AutomationGraph.Summarize(scene, _ => null, id => id == "evening" ? "Evening" : null));
+        Assert.Equal("Turn on (missing scene)", NodeText.Describe(new SceneActionNode { SceneId = "removed" }, _ => null, _ => null));
+        Assert.Equal("Scene", NodeText.Title(scene.Nodes[1]));
     }
 
     [Fact]
@@ -352,7 +377,7 @@ public class AutomationGraphTests
         foreach (var template in Enum.GetValues<AutomationTemplate>().Where(t => t != AutomationTemplate.Blank))
         {
             var automation = AutomationTemplates.Create(template, devices);
-            var issues = AutomationGraph.Validate(automation, new HashSet<string> { "lamp" }, hasLocation: true);
+            var issues = AutomationGraph.Validate(automation, new HashSet<string> { "lamp" }, new HashSet<string>(), hasLocation: true);
             Assert.True(issues.Count == 0, $"{template}: {string.Join("; ", issues.Select(i => i.Message))}");
         }
     }
@@ -490,6 +515,98 @@ public class AutomationRunnerTests
         Assert.Contains("TurnOn lamp", host.Commands);
         Assert.Contains("Toggle desk", host.Commands);
         Assert.False(host.Devices["desk"].On);
+    }
+
+    private static (Automation Automation, AutomationNode Trigger) Scene(DeviceCommand command, string? sceneId = "evening")
+    {
+        var automation = new Automation();
+        var trigger = automation.Add(new ClapTriggerNode());
+        automation.Wire(trigger, automation.Add(new SceneActionNode { SceneId = sceneId, Command = command }));
+        return (automation, trigger);
+    }
+
+    [Fact]
+    public async Task A_scene_switches_all_its_devices()
+    {
+        var host = new FakeAutomationHost();
+        var (automation, trigger) = Scene(DeviceCommand.TurnOn);
+
+        var result = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Normal, default);
+
+        Assert.Equal(["TurnOn lamp", "TurnOn desk"], host.Commands);
+        Assert.Equal("Turned on the scene Evening", result.Summary);
+
+        host.Commands.Clear();
+        (automation, trigger) = Scene(DeviceCommand.TurnOff);
+        result = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Normal, default);
+        Assert.Equal(["TurnOff lamp", "TurnOff desk"], host.Commands);
+        Assert.Equal("Turned off the scene Evening", result.Summary);
+    }
+
+    [Fact]
+    public async Task Toggling_a_scene_turns_it_all_off_while_any_device_is_on()
+    {
+        // As its toggle in the tray: on while any of its devices is on (the desk is).
+        var host = new FakeAutomationHost();
+        var (automation, trigger) = Scene(DeviceCommand.Toggle);
+
+        var off = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Normal, default);
+        Assert.Equal(["TurnOff lamp", "TurnOff desk"], host.Commands);
+        Assert.Equal("Toggled the scene Evening (off)", off.Summary);
+
+        host.Commands.Clear();
+        var on = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Normal, default);
+        Assert.Equal(["TurnOn lamp", "TurnOn desk"], host.Commands);
+        Assert.Equal("Toggled the scene Evening (on)", on.Summary);
+    }
+
+    [Fact]
+    public async Task A_scene_switches_the_devices_it_can_and_says_which_it_couldnt()
+    {
+        var host = new FakeAutomationHost
+        {
+            Respond = (id, _) => id == "lamp" ? new DeviceCommandResult(false, null, "The device is offline.") : new DeviceCommandResult(true, true, "ok"),
+        };
+        host.Scenes["evening"] = ("Evening", ["lamp", "removed", "desk"]);
+        var (automation, trigger) = Scene(DeviceCommand.TurnOn);
+
+        var result = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Normal, default);
+
+        Assert.Equal(["TurnOn lamp", "TurnOn desk"], host.Commands); // a removed device is left out
+        Assert.True(result.Failed);
+        Assert.Equal("Turn on the scene Evening: Lamp: The device is offline.", result.Summary);
+    }
+
+    [Fact]
+    public async Task A_scene_device_is_retried_after_a_connection_error()
+    {
+        var host = new FakeAutomationHost();
+        host.Failures.Enqueue(new GoogleHomeException("home.google.com could not be loaded"));
+        var (automation, trigger) = Scene(DeviceCommand.TurnOn);
+
+        var result = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Normal, default);
+
+        Assert.False(result.Failed);
+        Assert.Equal(["TurnOn desk", "TurnOn lamp", "TurnOn lamp"], host.Commands.Order()); // the lamp twice
+        Assert.Equal([TimeSpan.FromSeconds(5)], host.Delays);
+    }
+
+    [Fact]
+    public async Task A_removed_or_empty_scene_is_a_failure()
+    {
+        var host = new FakeAutomationHost();
+        host.Scenes["empty"] = ("Nothing", ["removed"]);
+
+        foreach (var (sceneId, expected) in new[] { ("gone", "the scene was removed"), ("empty", "the scene has no devices"), (null, "no scene chosen") })
+        {
+            var (automation, trigger) = Scene(DeviceCommand.TurnOn, sceneId);
+            var result = await new AutomationRunner(host).RunAsync(automation, trigger, RunOptions.Normal, default);
+
+            Assert.True(result.Failed);
+            Assert.Contains(expected, result.Summary);
+        }
+
+        Assert.Empty(host.Commands);
     }
 }
 
@@ -900,6 +1017,7 @@ public class AutomationStoreTests : IDisposable
             new PcStateConditionNode { State = PcState.OnBattery },
             new DeviceActionNode { DeviceId = "lamp", Command = DeviceCommand.Toggle },
             new AllOffActionNode(),
+            new SceneActionNode { SceneId = "evening", Command = DeviceCommand.TurnOff },
             new DelayActionNode { Seconds = 90 },
             new NotifyActionNode { Message = "Hi" },
             new PcPowerActionNode { Command = PcPowerCommand.Sleep },
@@ -922,9 +1040,12 @@ public class AutomationStoreTests : IDisposable
         Assert.Equal(10, dusk.At.OffsetMinutes);
         Assert.Equal(Weekdays.Weekend, dusk.Days);
         Assert.Equal(new TimeOnly(22, 15), Assert.IsType<TimeWindowConditionNode>(copy.Nodes[3]).From.Time);
-        Assert.Equal(3, Assert.IsType<ClapTriggerNode>(copy.Nodes[12]).Count);
+        Assert.Equal(3, Assert.IsType<ClapTriggerNode>(copy.Nodes[13]).Count);
+        var scene = Assert.IsType<SceneActionNode>(copy.Nodes[9]);
+        Assert.Equal(("evening", DeviceCommand.TurnOff), (scene.SceneId, scene.Command));
         Assert.Contains("\"type\": \"trigger.time\"", File.ReadAllText(store.FilePath));
         Assert.Contains("\"type\": \"trigger.claps\"", File.ReadAllText(store.FilePath));
+        Assert.Contains("\"type\": \"action.scene\"", File.ReadAllText(store.FilePath));
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using HomeControl.Core.Hotkeys;
 
 namespace HomeControl.Core.Models;
@@ -11,6 +12,10 @@ public sealed class SceneConfig
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
 
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>The name as shown.</summary>
+    [JsonIgnore]
+    public string Label => string.IsNullOrWhiteSpace(Name) ? "Scene" : Name.Trim();
 
     /// <summary>The icon.</summary>
     public DeviceKind Kind { get; set; } = DeviceKind.Scene;

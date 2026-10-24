@@ -61,11 +61,11 @@ Sign-in uses the standard installed-app OAuth flow: your browser, a loopback red
 
 ## Scenes
 
-A scene groups devices under one toggle. Turning it on turns every device in it on, and turning it off turns them all off. It shows as on while any of its devices is on, as a room does in Google Home. Create scenes under **Settings › Scenes**: pick the devices, an icon and an optional shortcut. Choose whether the scene shows in the tray flyout, where it appears above the devices. **Move up/down** sets the order there. Each device in a scene switches through its own row, so a slow device (a TV, say) waits for confirmation in the same way.
+A scene groups devices under one toggle. Turning it on turns every device in it on, and turning it off turns them all off. It shows as on while any of its devices is on, as a room does in Google Home. Create scenes under **Settings › Scenes**: pick the devices, an icon and an optional shortcut. Choose whether the scene shows in the tray flyout, where it appears above the devices. **Move up/down** sets the order there. Each device in a scene switches through its own row, so a slow device (a TV, say) waits for confirmation in the same way. Automations can switch scenes too (the **Scene** action, below).
 
 ## Automations
 
-Each automation is a small graph. **Triggers** (when) start it, **conditions** (if) choose a path through their *Yes* and *No* outputs, and **actions** (then) do the work. **New automation** starts an empty one. Add nodes with the editor's **Trigger**, **Condition** and **Action** buttons, or right-click the canvas. Wire nodes together by dragging from the dot on the right of one node to the dot on the left of the next. You can also drop a wire on an empty spot to add a connected node there. The editor has undo, zoom, and **Run now**, which runs the automation from a trigger and skips waits. Problems such as a missing device, a node that isn't connected, or sun times without a location are flagged on the nodes.
+Each automation is a small graph. **Triggers** (when) start it, **conditions** (if) choose a path through their *Yes* and *No* outputs, and **actions** (then) do the work. **New automation** starts an empty one. Add nodes with the editor's **Trigger**, **Condition** and **Action** buttons, or right-click the canvas. Wire nodes together by dragging from the dot on the right of one node to the dot on the left of the next. You can also drop a wire on an empty spot to add a connected node there. The editor has undo, zoom, and **Run now**, which runs the automation from a trigger and skips waits. Problems such as a missing device or scene, a node that isn't connected, or sun times without a location are flagged on the nodes.
 
 | Node | Kind | What it does |
 |---|---|---|
@@ -78,6 +78,7 @@ Each automation is a small graph. **Triggers** (when) start it, **conditions** (
 | **Device state** | Condition | A device is on or off |
 | **PC state** | Condition | Locked or unlocked, idle or in use, on battery or plugged in, display on or off |
 | **Device** | Action | Turn a device on or off, or toggle it |
+| **Scene** | Action | Turn a scene (see above) on or off, or toggle it, as its toggle in the tray does: all its devices at once, and toggling turns them all off while any of them is on |
 | **Everything off** | Action | Turn every device in the tray off |
 | **Wait** | Action | Wait before the next step |
 | **Notification** | Action | Show a Windows notification |

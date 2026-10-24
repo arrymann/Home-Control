@@ -297,6 +297,12 @@ internal sealed class AutomationService : IDisposable
             return result;
         }
 
+        public string? GetSceneName(string? sceneId) =>
+            sceneId is null ? null : App.Settings.Scenes.FirstOrDefault(s => s.Id == sceneId)?.Label;
+
+        public IReadOnlyList<string>? GetSceneDevices(string sceneId) =>
+            App.Settings.Scenes.FirstOrDefault(s => s.Id == sceneId)?.DeviceIds.ToList();
+
         /// <summary>Turns off every device in the tray, whatever its last known state (which may be old).</summary>
         public async Task TurnAllOffAsync(CancellationToken cancellationToken)
         {

@@ -27,6 +27,7 @@ internal static class NodeCatalog
         new(NodeCategory.Condition, "Device state", "Whether a device is on or off", () => new DeviceStateConditionNode()),
         new(NodeCategory.Condition, "PC state", "Locked, idle, on battery…", () => new PcStateConditionNode()),
         new(NodeCategory.Action, "Device", "Turn a device on or off, or toggle it", () => new DeviceActionNode()),
+        new(NodeCategory.Action, "Scene", "Turn a scene on or off, or toggle it", () => new SceneActionNode()),
         new(NodeCategory.Action, "Everything off", "Turn off every device in the tray", () => new AllOffActionNode()),
         new(NodeCategory.Action, "Wait", "Wait before the next step", () => new DelayActionNode()),
         new(NodeCategory.Action, "Notification", "Show a Windows notification", () => new NotifyActionNode()),
@@ -337,7 +338,7 @@ public sealed class NodeCanvas : UserControl
 
     private void PrepareNew(AutomationNode node)
     {
-        // Devices: start with the first one, so a new node is useful right away.
+        // Devices and scenes: start with the first one, so a new node is useful right away.
         var first = _context?.Devices.FirstOrDefault().Id;
         switch (node)
         {
@@ -346,6 +347,9 @@ public sealed class NodeCanvas : UserControl
                 break;
             case DeviceStateConditionNode { DeviceId: null } condition:
                 condition.DeviceId = first;
+                break;
+            case SceneActionNode { SceneId: null } scene:
+                scene.SceneId = _context?.Scenes.FirstOrDefault().Id;
                 break;
         }
     }

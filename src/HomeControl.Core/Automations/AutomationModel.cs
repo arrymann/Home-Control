@@ -85,6 +85,7 @@ public static class Ports
 [JsonDerivedType(typeof(DeviceStateConditionNode), "condition.device")]
 [JsonDerivedType(typeof(PcStateConditionNode), "condition.pc")]
 [JsonDerivedType(typeof(DeviceActionNode), "action.device")]
+[JsonDerivedType(typeof(SceneActionNode), "action.scene")]
 [JsonDerivedType(typeof(AllOffActionNode), "action.alloff")]
 [JsonDerivedType(typeof(DelayActionNode), "action.delay")]
 [JsonDerivedType(typeof(NotifyActionNode), "action.notify")]
@@ -346,6 +347,20 @@ public sealed class DeviceActionNode : AutomationNode
     public override NodeCategory Category => NodeCategory.Action;
 
     public string? DeviceId { get; set; }
+
+    public DeviceCommand Command { get; set; } = DeviceCommand.TurnOn;
+}
+
+/// <summary>
+/// Turns a scene (Settings › Scenes) on or off, or toggles it, as its toggle in the tray does:
+/// all its devices at once.
+/// </summary>
+public sealed class SceneActionNode : AutomationNode
+{
+    public override NodeCategory Category => NodeCategory.Action;
+
+    /// <summary>The scene's <see cref="Models.SceneConfig.Id"/>.</summary>
+    public string? SceneId { get; set; }
 
     public DeviceCommand Command { get; set; } = DeviceCommand.TurnOn;
 }

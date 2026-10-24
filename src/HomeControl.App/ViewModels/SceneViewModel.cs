@@ -26,7 +26,7 @@ public sealed class SceneViewModel : BindableBase
 
     public SceneConfig Config => _config;
 
-    public string Label => string.IsNullOrWhiteSpace(_config.Name) ? "Scene" : _config.Name.Trim();
+    public string Label => _config.Label;
 
     public DeviceKind Kind => _config.Kind;
 

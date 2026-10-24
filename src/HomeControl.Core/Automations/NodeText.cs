@@ -16,6 +16,7 @@ public static class NodeText
         DeviceStateConditionNode => "Device state",
         PcStateConditionNode => "PC state",
         DeviceActionNode => "Device",
+        SceneActionNode => "Scene",
         AllOffActionNode => "Everything off",
         DelayActionNode => "Wait",
         NotifyActionNode => "Notification",
@@ -24,7 +25,9 @@ public static class NodeText
     };
 
     /// <summary>A sentence such as "15 min before sunset" or "Turn on Backlight".</summary>
-    public static string Describe(AutomationNode node, Func<string?, string?> deviceName) => node switch
+    /// <param name="deviceName">A device's label by its id; null when there is no such device.</param>
+    /// <param name="sceneName">... a scene's name.</param>
+    public static string Describe(AutomationNode node, Func<string?, string?> deviceName, Func<string?, string?> sceneName) => node switch
     {
         TimeTriggerNode t => $"{Capitalize(TimePoint(t.At, atPrefix: true))}{DaysSuffix(t.Days)}",
         PcEventTriggerNode p => PcEventText(p.Event, p.IdleMinutes),
@@ -44,6 +47,12 @@ public static class NodeText
             DeviceCommand.TurnOff => $"Turn off {DeviceLabel(a.DeviceId, deviceName)}",
             DeviceCommand.Toggle => $"Toggle {DeviceLabel(a.DeviceId, deviceName)}",
             _ => $"Turn on {DeviceLabel(a.DeviceId, deviceName)}",
+        },
+        SceneActionNode s => s.Command switch
+        {
+            DeviceCommand.TurnOff => $"Turn off {SceneLabel(s.SceneId, sceneName)}",
+            DeviceCommand.Toggle => $"Toggle {SceneLabel(s.SceneId, sceneName)}",
+            _ => $"Turn on {SceneLabel(s.SceneId, sceneName)}",
         },
         AllOffActionNode => "Turn every device off",
         DelayActionNode d => $"Wait {Duration(TimeSpan.FromSeconds(d.Seconds))}",
@@ -157,6 +166,10 @@ public static class NodeText
 
     private static string DeviceLabel(string? deviceId, Func<string?, string?> deviceName) =>
         deviceName(deviceId) ?? (string.IsNullOrEmpty(deviceId) ? "(no device)" : "(missing device)");
+
+    /// <summary>"the scene Evening".</summary>
+    private static string SceneLabel(string? sceneId, Func<string?, string?> sceneName) =>
+        sceneName(sceneId) is { } name ? $"the scene {name}" : string.IsNullOrEmpty(sceneId) ? "(no scene)" : "(missing scene)";
 
     private static string Capitalize(string text) => text.Length == 0 ? text : char.ToUpper(text[0], CultureInfo.CurrentCulture) + text[1..];
 }

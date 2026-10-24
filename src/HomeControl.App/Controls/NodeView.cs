@@ -15,6 +15,9 @@ public interface INodeEditorContext
     /// <summary>Devices to pick from (id, label).</summary>
     IReadOnlyList<(string Id, string Name)> Devices { get; }
 
+    /// <summary>Scenes to pick from (id, name).</summary>
+    IReadOnlyList<(string Id, string Name)> Scenes { get; }
+
     /// <summary>"Next: today 21:14", or a hint when it can't be worked out.</summary>
     string NextRunText(TimeTriggerNode trigger);
 
@@ -234,6 +237,7 @@ public sealed class NodeView : UserControl
         DeviceStateConditionNode => "",
         PcStateConditionNode => "",
         DeviceActionNode => "",
+        SceneActionNode => "\uE8A9",
         AllOffActionNode => "",
         DelayActionNode => "",
         NotifyActionNode => "",
@@ -339,13 +343,16 @@ public sealed class NodeView : UserControl
             }
 
             case DeviceActionNode a:
-                body.Children.Add(Choice("Do", a.Command, v => v switch
-                {
-                    DeviceCommand.TurnOff => "Turn off",
-                    DeviceCommand.Toggle => "Toggle",
-                    _ => "Turn on",
-                }, v => a.Command = v));
+                body.Children.Add(Choice("Do", a.Command, CommandName, v => a.Command = v));
                 body.Children.Add(DevicePicker(() => a.DeviceId, id => a.DeviceId = id));
+                break;
+
+            case SceneActionNode s:
+                body.Children.Add(Choice("Do", s.Command, CommandName, v => s.Command = v));
+                body.Children.Add(Picker("Scene", _context.Scenes, "(removed scene)", "No scenes yet", "Pick a scene", () => s.SceneId, id => s.SceneId = id));
+                body.Children.Add(Caption(_context.Scenes.Count == 0
+                    ? "Make scenes in Settings › Scenes."
+                    : "Switches all its devices at once. Toggling turns them all off while any of them is on."));
                 break;
 
             case AllOffActionNode:
@@ -391,6 +398,13 @@ public sealed class NodeView : UserControl
     }
 
     private const string PcPowerWarning = "one minute";
+
+    private static string CommandName(DeviceCommand value) => value switch
+    {
+        DeviceCommand.TurnOff => "Turn off",
+        DeviceCommand.Toggle => "Toggle",
+        _ => "Turn on",
+    };
 
     private static string PcEventName(PcEvent value) => value switch
     {
@@ -535,28 +549,33 @@ public sealed class NodeView : UserControl
         return row;
     }
 
-    private FrameworkElement DevicePicker(Func<string?> get, Action<string?> set)
+    private FrameworkElement DevicePicker(Func<string?> get, Action<string?> set) =>
+        Picker("Device", _context.Devices, "(removed device)", "No devices yet", "Pick a device", get, set);
+
+    /// <summary>A ComboBox of devices or scenes; one that was removed stays in it, as such, until another is picked.</summary>
+    private FrameworkElement Picker(
+        string header, IReadOnlyList<(string Id, string Name)> choices, string removed, string none, string placeholder, Func<string?> get, Action<string?> set)
     {
-        var devices = _context.Devices.ToList();
+        var items = choices.ToList();
         var current = get();
-        if (current is not null && devices.All(d => d.Id != current))
+        if (current is not null && items.All(d => d.Id != current))
         {
-            devices.Insert(0, (current, "(removed device)"));
+            items.Insert(0, (current, removed));
         }
 
         var box = new ComboBox
         {
-            Header = "Device",
-            ItemsSource = devices.Select(d => d.Name).ToList(),
-            SelectedIndex = devices.FindIndex(d => d.Id == current),
-            PlaceholderText = devices.Count == 0 ? "No devices yet" : "Pick a device",
+            Header = header,
+            ItemsSource = items.Select(d => d.Name).ToList(),
+            SelectedIndex = items.FindIndex(d => d.Id == current),
+            PlaceholderText = items.Count == 0 ? none : placeholder,
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
         box.SelectionChanged += (_, _) =>
         {
             if (!_loading && box.SelectedIndex >= 0)
             {
-                set(devices[box.SelectedIndex].Id);
+                set(items[box.SelectedIndex].Id);
                 OnEdited();
             }
         };

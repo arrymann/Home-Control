@@ -90,6 +90,9 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
     IReadOnlyList<(string Id, string Name)> INodeEditorContext.Devices =>
         App.Host.Settings.Devices.Where(d => !d.Missing).Select(d => (d.Id, d.Label.Trim())).ToList();
 
+    IReadOnlyList<(string Id, string Name)> INodeEditorContext.Scenes =>
+        App.Host.Settings.Scenes.Select(s => (s.Id, s.Label)).ToList();
+
     string INodeEditorContext.NextRunText(TimeTriggerNode trigger)
     {
         if (trigger.At.IsSolar && Service.Document.Location is null)
@@ -177,16 +180,17 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
     private void RefreshList()
     {
         var deviceIds = App.Host.Settings.Devices.Where(d => !d.Missing).Select(d => d.Id).ToHashSet();
+        var sceneIds = App.Host.Settings.Scenes.Select(s => s.Id).ToHashSet();
         var hasLocation = Service.Document.Location is not null;
         var items = Service.Document.Automations.Select(a =>
         {
-            var issues = AutomationGraph.Validate(a, deviceIds, hasLocation);
+            var issues = AutomationGraph.Validate(a, deviceIds, sceneIds, hasLocation);
             var status = issues.Any(i => i.Severity == IssueSeverity.Error)
                 ? "Needs attention: " + issues.First(i => i.Severity == IssueSeverity.Error).Message
                 : a.LastRun is { } lastRun
                     ? $"Ran {Friendly(lastRun)}: {a.LastResult}"
                     : "Hasn't run yet";
-            return new AutomationListItem(a, AutomationGraph.Summarize(a, DeviceName), status);
+            return new AutomationListItem(a, AutomationGraph.Summarize(a, DeviceName, SceneName), status);
         }).ToList();
 
         AutomationList.ItemsSource = items;
@@ -346,7 +350,8 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         }
 
         var deviceIds = App.Host.Settings.Devices.Where(d => !d.Missing).Select(d => d.Id).ToHashSet();
-        var issues = AutomationGraph.Validate(_editing, deviceIds, Service.Document.Location is not null);
+        var sceneIds = App.Host.Settings.Scenes.Select(s => s.Id).ToHashSet();
+        var issues = AutomationGraph.Validate(_editing, deviceIds, sceneIds, Service.Document.Location is not null);
         GraphCanvas.SetIssues(issues);
 
         if (issues.Count == 0)
@@ -418,7 +423,7 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
             var menu = new MenuFlyout();
             foreach (var trigger in triggers)
             {
-                var item = new MenuFlyoutItem { Text = NodeText.Describe(trigger, DeviceName), Icon = new FontIcon { Glyph = NodeView.Glyph(trigger) } };
+                var item = new MenuFlyoutItem { Text = NodeText.Describe(trigger, DeviceName, SceneName), Icon = new FontIcon { Glyph = NodeView.Glyph(trigger) } };
                 item.Click += (_, _) => _ = RunAsync(trigger);
                 menu.Items.Add(item);
             }
@@ -435,7 +440,7 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         }
 
         RunButton.IsEnabled = false;
-        ShowRunBar(InfoBarSeverity.Informational, "Running…", NodeText.Describe(trigger, DeviceName));
+        ShowRunBar(InfoBarSeverity.Informational, "Running…", NodeText.Describe(trigger, DeviceName, SceneName));
         try
         {
             var result = await Service.RunNowAsync(automation, trigger);
@@ -633,6 +638,9 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
 
     private static string? DeviceName(string? id) =>
         id is null ? null : App.Host.Settings.Devices.FirstOrDefault(d => d.Id == id && !d.Missing)?.Label.Trim();
+
+    private static string? SceneName(string? id) =>
+        id is null ? null : App.Host.Settings.Scenes.FirstOrDefault(s => s.Id == id)?.Label;
 
     /// <summary>"today 21:14", "tomorrow 07:02", "yesterday 18:00", "Mon 07:00", "12 Oct 07:00".</summary>
     private static string Friendly(DateTimeOffset time)

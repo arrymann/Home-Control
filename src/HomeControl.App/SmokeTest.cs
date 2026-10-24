@@ -161,6 +161,7 @@ internal static class SmokeTest
             new AllOffActionNode { X = 1060, Y = 300 },
             new PcPowerActionNode { X = 1060, Y = 480, Command = PcPowerCommand.ShutDown },
             new ClapTriggerNode { X = 40, Y = 840, Count = 3 },
+            new SceneActionNode { X = 380, Y = 840, SceneId = host.Settings.Scenes[0].Id, Command = DeviceCommand.Toggle },
         ];
         everything.Nodes.AddRange(everyNode);
         void Wire(int from, int to, string port = Ports.Then) => AutomationGraph.Connect(everything, everyNode[from].Id, port, everyNode[to].Id);
@@ -173,6 +174,7 @@ internal static class SmokeTest
         Wire(2, 10);
         Wire(5, 11, Ports.Yes);
         Wire(12, 8);
+        Wire(12, 13);
         var automations = host.Automations.Document;
         automations.Location = new GeoLocation(51.5074, -0.1278, "London, England, United Kingdom");
         automations.Automations.Add(AutomationTemplates.Create(AutomationTemplate.LightsAtSunset, samples));
@@ -180,8 +182,8 @@ internal static class SmokeTest
         automations.Automations.Add(everything);
         foreach (var automation in automations.Automations)
         {
-            var issues = AutomationGraph.Validate(automation, samples.Select(d => d.Id).ToHashSet(), hasLocation: true)
-                .Where(i => i.Severity == IssueSeverity.Error && automation != everything);
+            var issues = AutomationGraph.Validate(automation, samples.Select(d => d.Id).ToHashSet(), host.Settings.Scenes.Select(s => s.Id).ToHashSet(), hasLocation: true)
+                .Where(i => i.Severity == IssueSeverity.Error && (automation != everything || i.NodeId == everyNode[13].Id));
             errors.AddRange(issues.Select(i => $"Automation “{automation.Name}”: {i.Message}"));
         }
 

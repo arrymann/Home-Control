@@ -2,6 +2,7 @@ using Grpc.Core;
 using HomeControl.Core.Assistant;
 using HomeControl.Core.Devices;
 using HomeControl.Core.GoogleHome;
+using HomeControl.Core.Models;
 
 namespace HomeControl.Core.Automations;
 
@@ -26,6 +27,12 @@ public interface IAutomationHost
     Task<bool?> GetDeviceStateAsync(string deviceId, CancellationToken cancellationToken);
 
     Task<DeviceCommandResult> SetDeviceAsync(string deviceId, DeviceCommand command, CancellationToken cancellationToken);
+
+    /// <summary>The scene's name, or null when there is no such scene.</summary>
+    string? GetSceneName(string? sceneId);
+
+    /// <summary>The devices a scene switches, in order; null when there is no such scene.</summary>
+    IReadOnlyList<string>? GetSceneDevices(string sceneId);
 
     Task TurnAllOffAsync(CancellationToken cancellationToken);
 
@@ -114,6 +121,7 @@ public sealed class AutomationRunResult
 public sealed class AutomationRunner
 {
     private const int MaxSteps = 500;
+    private const int MaxParallelDevices = 4;
     private static readonly TimeSpan[] RetryDelays = [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15)];
 
     private readonly IAutomationHost _host;
@@ -173,7 +181,7 @@ public sealed class AutomationRunner
             catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
                 // E.g. a device's state couldn't be read: this branch stops, the others carry on.
-                result.Add(new(node.Id, node.Category, $"{NodeText.Describe(node, _host.GetDeviceName)}: couldn't check ({ex.Message})", false));
+                result.Add(new(node.Id, node.Category, $"{NodeText.Describe(node, _host.GetDeviceName, _host.GetSceneName)}: couldn't check ({ex.Message})", false));
                 return;
             }
 
@@ -191,7 +199,7 @@ public sealed class AutomationRunner
 
     private async Task<(bool Met, string Text)> EvaluateAsync(AutomationNode node, CancellationToken cancellationToken)
     {
-        var description = NodeText.Describe(node, _host.GetDeviceName);
+        var description = NodeText.Describe(node, _host.GetDeviceName, _host.GetSceneName);
         bool met;
         switch (node)
         {
@@ -230,7 +238,7 @@ public sealed class AutomationRunner
 
     private async Task<AutomationStep> RunActionAsync(AutomationNode node, RunOptions options, CancellationToken cancellationToken)
     {
-        var description = NodeText.Describe(node, _host.GetDeviceName);
+        var description = NodeText.Describe(node, _host.GetDeviceName, _host.GetSceneName);
         try
         {
             switch (node)
@@ -240,6 +248,12 @@ public sealed class AutomationRunner
 
                 case DeviceActionNode:
                     return new(node.Id, node.Category, $"{description}: no device chosen", false);
+
+                case SceneActionNode { SceneId: { } sceneId } scene:
+                    return await RunSceneActionAsync(node, sceneId, scene.Command, description, options, cancellationToken);
+
+                case SceneActionNode:
+                    return new(node.Id, node.Category, $"{description}: no scene chosen", false);
 
                 case AllOffActionNode:
                     await _host.TurnAllOffAsync(cancellationToken);
@@ -286,14 +300,97 @@ public sealed class AutomationRunner
             return new(node.Id, node.Category, $"{description}: the device was removed", false);
         }
 
+        var result = await WithRetriesAsync(() => _host.SetDeviceAsync(deviceId, command, cancellationToken), options, cancellationToken);
+        return result.Success
+            ? new(node.Id, node.Category, Done(command, _host.GetDeviceName(deviceId)!, result.IsOn), true)
+            : new(node.Id, node.Category, $"{description}: {result.Message}", false);
+    }
+
+    /// <summary>
+    /// Switches a scene as its toggle in the tray does: all its devices on, or all off (toggling
+    /// turns them off while any of them is on). Each device is switched, and retried, on its own.
+    /// </summary>
+    private async Task<AutomationStep> RunSceneActionAsync(
+        AutomationNode node, string sceneId, DeviceCommand command, string description, RunOptions options, CancellationToken cancellationToken)
+    {
+        if (_host.GetSceneName(sceneId) is not { } name || _host.GetSceneDevices(sceneId) is not { } members)
+        {
+            return new(node.Id, node.Category, $"{description}: the scene was removed", false);
+        }
+
+        // Devices that were removed are left out, as in the tray.
+        var devices = members.Where(id => _host.GetDeviceName(id) is not null).Distinct().ToList();
+        if (devices.Count == 0)
+        {
+            return new(node.Id, node.Category, $"{description}: the scene has no devices", false);
+        }
+
+        var turnOn = command switch
+        {
+            DeviceCommand.TurnOn => true,
+            DeviceCommand.TurnOff => false,
+            _ => !(SceneConfig.StateOf(await ForEachDeviceAsync(devices, id => StateOrUnknownAsync(id, options, cancellationToken), cancellationToken)) ?? false),
+        };
+
+        var switchTo = turnOn ? DeviceCommand.TurnOn : DeviceCommand.TurnOff;
+        var failures = await ForEachDeviceAsync(devices, async id =>
+        {
+            try
+            {
+                var result = await WithRetriesAsync(() => _host.SetDeviceAsync(id, switchTo, cancellationToken), options, cancellationToken);
+                return result.Success ? null : $"{_host.GetDeviceName(id)}: {result.Message}";
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                return $"{_host.GetDeviceName(id)}: {ex.Message}";
+            }
+        }, cancellationToken);
+
+        var failed = failures.OfType<string>().ToList();
+        return failed.Count == 0
+            ? new(node.Id, node.Category, Done(command, $"the scene {name}", turnOn), true)
+            : new(node.Id, node.Category, $"{description}: {string.Join("; ", failed)}", false);
+    }
+
+    /// <summary>A device's state for toggling a scene: unknown when it can't be read (as in the tray, it then counts as off).</summary>
+    private async Task<bool?> StateOrUnknownAsync(string deviceId, RunOptions options, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await WithRetriesAsync(() => _host.GetDeviceStateAsync(deviceId, cancellationToken), options, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Runs <paramref name="action"/> for each device, a few at a time; the results come in the devices' order.</summary>
+    private static async Task<T[]> ForEachDeviceAsync<T>(IReadOnlyList<string> devices, Func<string, Task<T>> action, CancellationToken cancellationToken)
+    {
+        using var gate = new SemaphoreSlim(MaxParallelDevices);
+        return await Task.WhenAll(devices.Select(async id =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                return await action(id);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }));
+    }
+
+    /// <summary>Sends a request to a device, retrying it after connection errors.</summary>
+    private async Task<T> WithRetriesAsync<T>(Func<Task<T>> request, RunOptions options, CancellationToken cancellationToken)
+    {
         for (var attempt = 0; ; attempt++)
         {
             try
             {
-                var result = await _host.SetDeviceAsync(deviceId, command, cancellationToken);
-                return result.Success
-                    ? new(node.Id, node.Category, Done(command, _host.GetDeviceName(deviceId)!, result.IsOn), true)
-                    : new(node.Id, node.Category, $"{description}: {result.Message}", false);
+                return await request();
             }
             catch (Exception ex) when (options.RetryDevices && attempt < RetryDelays.Length && IsTransient(ex) && !cancellationToken.IsCancellationRequested)
             {
