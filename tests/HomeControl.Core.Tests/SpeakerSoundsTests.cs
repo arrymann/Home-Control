@@ -106,7 +106,7 @@ public class SpeakerSoundsTests
     public void Slower_speakers_than_allowed_for_get_through()
     {
         // Why the app picks the delay for the device: Bluetooth speakers are late for a wired window.
-        var played = new ClapSignals(48000, 4, seed: 11, room: false).AddClaps(1.0, 0.5, 2, -10);
+        var played = new ClapSignals(48000, 4, seed: 11, room: false).AddClaps(1.0, 0.4, 2, -10);
         var mic = new ClapSignals(48000, 4, seed: 7).AddPlayed(played, 0.3);
 
         Assert.Equal([2], Listen(mic, played, SpeakerStream.WiredMaxDelay).Patterns);
@@ -204,12 +204,12 @@ public class SpeakerSoundsTests
     public void The_users_claps_over_the_speakers_beat_count()
     {
         // A beat plays all along and the room hears it: a wash of cymbals with a snare every
-        // half second. The user claps right on two snares, much more sharply than any of them.
+        // 0.4 s. The user claps right on two snares, much more sharply than any of them.
         // (Before, every snare hid claps for a fifth of a second, so these never counted.)
         ForEachRate(rate =>
         {
-            var played = new ClapSignals(rate, 5, seed: 11, room: false).AddNoise(-40).AddClaps(0.5, 0.5, 9, -30);
-            var mic = new ClapSignals(rate, 5, seed: 7).AddPlayed(played, 0.02, -12).AddClaps(1.55, 0.5, 2, -14);
+            var played = new ClapSignals(rate, 5, seed: 11, room: false).AddNoise(-40).AddClaps(0.5, 0.4, 11, -30);
+            var mic = new ClapSignals(rate, 5, seed: 7).AddPlayed(played, 0.02, -12).AddClaps(1.35, 0.4, 2, -14);
 
             Assert.Equal([2], Listen(mic, played).Patterns);
         });

@@ -38,6 +38,9 @@ public enum ClapVerdict
     /// <summary>Mostly low-pitched (a knock or a thump).</summary>
     TooLowPitched,
 
+    /// <summary>Dull, with more body than high band, and not loud (a footstep, something put down).</summary>
+    Thud,
+
     /// <summary>Only high-pitched, with no lower body (a click or a machine's tick).</summary>
     NoBody,
 
@@ -109,13 +112,15 @@ public readonly record struct ClapDetectorState(
 /// its peak it has dropped by a few dB (speech and music don't) but still has a loud room tail
 /// (clicks next to the microphone don't), it has faded within about 150 ms, nothing rises again
 /// during an 80 ms hold, and the high band isn't far quieter than the low band (knocks and
-/// thumps are; claps with cupped hands can be 17 dB duller). It also has a body: hands meeting
-/// sound from about 500 Hz up, so the body band rises over its background, clearly more than
-/// that background moves by itself, and isn't far quieter than the high band, while clicks,
-/// taps and a machine's ticks (a 3D printer's) are only high-pitched. The balances between bands
-/// are of the sound's own energy, with the room's share taken out, so a loud hum or whine
-/// doesn't make claps look dull or bodiless.
-/// Claps in a row are 200–500 ms apart in a steady rhythm (no gap over 1.75 times another). A
+/// thumps are; claps with cupped hands can be 17 dB duller, but only loud ones close by are
+/// also bodied: a quieter dull sound whose body outweighs its high band is a thud, a footstep
+/// or something put down). It also has a body: hands meeting sound from about 500 Hz up, so
+/// the body band rises over its background, clearly more than that background moves by
+/// itself, and isn't far quieter than the high band, while clicks, taps and a machine's ticks
+/// (a 3D printer's) are only high-pitched. The balances between bands are of the sound's own
+/// energy, with the room's share taken out, so a loud hum or whine doesn't make claps look
+/// dull or bodiless.
+/// Claps in a row are 200–450 ms apart in a steady rhythm (no gap over 1.75 times another). A
 /// sequence starts only after 0.8 s without claps (or right after a finished sequence, so a
 /// pattern can be repeated), 0.3 s without other sounds and a second without other sharp
 /// sounds within 12 dB of its first clap (taps, clicks, things put down: deliberate claps stand
@@ -149,7 +154,7 @@ public sealed class ClapDetector
     private const double HoldSeconds = 0.08;
     private const double TailCheckSeconds = 0.04;
     private const double MinGap = 0.20;    // s: claps in a row are this far apart at least (quicker: a bounce, a double click) ...
-    private const double MaxGap = 0.50;    // ... and at most (slower: two sounds, not a double clap)
+    private const double MaxGap = 0.45;    // ... and at most (slower: two sounds, not a double clap)
     private const double MaxRhythmRatio = 1.75;
     private const double NoiseGuard = 0.30;
     private const double BusySeconds = 1.0;    // s: a sharp sound this little before a clap ...
@@ -157,6 +162,9 @@ public sealed class ClapDetector
     private const double SoundBelowClaps = 18; // dB: a sound with a low part (speech, music, a knock) this far below the claps doesn't count
     private const double DryTail = 8;          // dB: a sound that drops very fast is still a clap if its tail stays this loud ...
     private const double DryDropMargin = 4;    // dB: ... and it drops no more than this much faster than a clap may
+    private const double DullHighOverLow = -10; // dB: a sound whose high band is this far below its low part ...
+    private const double ThudBodyOverHigh = 3;  // ... and whose body is this much louder than its high band is a thud ...
+    private const double ThudAbove = 36;        // ... unless it rose this far over the room (cupped claps close by are as dull)
     private const double ClapGuard = 0.80;
     private const double ClosingQuiet = 0.25;
     private const double OnsetSeconds = 0.04;  // a sound may still grow this long after it starts
@@ -624,6 +632,10 @@ public sealed class ClapDetector
             if (HighOverLow() < t.MinHighOverLow)
             {
                 Reject(t, ClapVerdict.TooLowPitched); // a knock or a thump
+            }
+            else if (HighOverLow() <= DullHighOverLow && BodyOverHigh() >= ThudBodyOverHigh && _peakHigh - _floorHigh < ThudAbove)
+            {
+                Reject(t, ClapVerdict.Thud); // a footstep, something put down
             }
             else if (_peakBody - _floorBody < MinBodyRise(t) || BodyOverHigh() < t.MinBodyOverHigh)
             {

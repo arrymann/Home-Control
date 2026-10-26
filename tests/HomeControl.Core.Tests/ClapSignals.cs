@@ -301,6 +301,17 @@ internal sealed class ClapSignals
     }
 
     /// <summary>
+    /// A dull thud (a footstep, something put down on a table): mostly sound below 1.2 kHz,
+    /// dying away within a few tens of milliseconds, with only a little of the high band.
+    /// </summary>
+    public ClapSignals AddThud(double time, double peakDb = -30)
+    {
+        Burst(time, 0.2, t => Math.Min(1, t / 0.001) * Math.Exp(-t / 0.025), 150, 1200, Amplitude(peakDb));
+        Burst(time, 0.06, t => Math.Min(1, t / 0.0005) * Math.Exp(-t / 0.006), 1200, 6000, Amplitude(peakDb - 14));
+        return this;
+    }
+
+    /// <summary>
     /// A clap with cupped hands: besides the broadband burst, the hollow of the hands rings at
     /// a few hundred hertz, so the low band is as loud as the high band or louder. Clapped close
     /// to the microphone it may clip (<paramref name="clipAt"/>, the converter's full scale).

@@ -43,17 +43,17 @@ public class ClapDetectorTests
     // ---------------------------------------------------------------- claps it must hear
 
     [Theory]
-    [InlineData(new[] { 2 }, 0.40, 0.55)]     // the largest count: a short closing window
-    [InlineData(new[] { 2, 3 }, 0.50, 0.60)]  // a third clap could still come
+    [InlineData(new[] { 2 }, 0.33, 0.43)]     // the largest count: a short closing window
+    [InlineData(new[] { 2, 3 }, 0.44, 0.52)]  // a third clap could still come
     public void Hears_two_claps_once_they_are_over(int[] counts, double soonest, double latest)
     {
         ForEachRate(rate =>
         {
-            var heard = Listen(new ClapSignals(rate, 3).AddClaps(1.0, 0.3, 2), counts);
+            var heard = Listen(new ClapSignals(rate, 3).AddClaps(1.0, 0.25, 2), counts);
 
             var (count, time) = Assert.Single(heard.Patterns);
             Assert.Equal(2, count);
-            Assert.InRange(time - 1.3, soonest, latest);
+            Assert.InRange(time - 1.25, soonest, latest);
             Assert.Equal(2, heard.Claps);
         });
     }
@@ -73,7 +73,7 @@ public class ClapDetectorTests
 
     [Theory]
     [InlineData(0.21, -20)] // quick
-    [InlineData(0.48, -20)] // slow
+    [InlineData(0.43, -20)] // slow
     [InlineData(0.30, -35)] // quiet
     [InlineData(0.30, -3)]  // very loud
     public void Hears_claps_at_any_reasonable_pace_and_level(double gap, double level)
@@ -234,10 +234,10 @@ public class ClapDetectorTests
     [InlineData(new[] { 0.0, 0.3, 0.6 }, new[] { 2 })]                  // three when only two are used
     [InlineData(new[] { 0.0, 0.1 }, new[] { 2 })]                       // too close together
     [InlineData(new[] { 0.0, 0.15 }, new[] { 2 })]                      // quicker than deliberate claps (a bounce, a double click)
-    [InlineData(new[] { 0.0, 0.6 }, new[] { 2 })]                       // slower than deliberate claps
+    [InlineData(new[] { 0.0, 0.5 }, new[] { 2 })]                       // slower than deliberate claps
     [InlineData(new[] { 0.0, 0.8 }, new[] { 2 })]                       // too far apart
-    [InlineData(new[] { 0.0, 0.22, 0.7 }, new[] { 3 })]                 // no steady rhythm
-    [InlineData(new[] { 0.0, 0.45, 0.68 }, new[] { 3 })]                // slowing down then rushing
+    [InlineData(new[] { 0.0, 0.22, 0.64 }, new[] { 3 })]                // no steady rhythm
+    [InlineData(new[] { 0.0, 0.42, 0.65 }, new[] { 3 })]                // slowing down then rushing
     [InlineData(new[] { 0.0, 0.7, 1.0 }, new[] { 2 })]                  // a stray clap just before
     public void Wrong_patterns_are_ignored(double[] times, int[] counts)
     {
@@ -256,7 +256,7 @@ public class ClapDetectorTests
         });
     }
 
-    public static TheoryData<string> Sounds => ["knocks", "speech", "high speech", "plosives", "quiet typing", "loud typing", "music", "music with drums", "door slam", "coughs"];
+    public static TheoryData<string> Sounds => ["knocks", "speech", "high speech", "plosives", "quiet typing", "loud typing", "music", "music with drums", "door slam", "coughs", "thuds"];
 
     private static ClapSignals Sound(string name, int rate) => name switch
     {
@@ -270,6 +270,7 @@ public class ClapDetectorTests
         "music with drums" => new ClapSignals(rate, 5).AddMusic(0.6, 4, -20, kick: true),
         "door slam" => new ClapSignals(rate, 3).AddSlam(1.0),
         "coughs" => new ClapSignals(rate, 3).AddCough(1.0).AddCough(1.45),
+        "thuds" => new ClapSignals(rate, 3).AddThud(1.0, -26).AddThud(1.35, -26).AddThud(1.75, -30), // footsteps, things put down
         _ => throw new ArgumentException(name),
     };
 

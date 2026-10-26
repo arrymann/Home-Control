@@ -115,6 +115,7 @@ public sealed class ClapEvent
         ClapVerdict.NoRoomTail => "no room tail",
         ClapVerdict.DidntFade => "didn't fade",
         ClapVerdict.TooLowPitched => "too low-pitched",
+        ClapVerdict.Thud => "thud",
         ClapVerdict.NoBody => "no body",
         ClapVerdict.FromSpeakers => "from the speakers",
         _ => verdict.ToString(),

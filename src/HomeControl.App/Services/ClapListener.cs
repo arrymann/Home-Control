@@ -349,6 +349,7 @@ internal sealed class ClapListener : IDisposable
             ClapVerdict.NoRoomTail => "not a clap: stopped dead (a click next to the microphone)",
             ClapVerdict.DidntFade => "not a clap: didn't fade like a clap",
             ClapVerdict.TooLowPitched => "not a clap: too low-pitched (a knock, a thump)",
+            ClapVerdict.Thud => "not a clap: a dull thud (a footstep, something put down)",
             ClapVerdict.NoBody => "not a clap: no lower body (a click, a machine's tick)",
             ClapVerdict.FromSpeakers => "not a clap: from the PC's speakers",
             _ => judgement.Verdict.ToString(),
