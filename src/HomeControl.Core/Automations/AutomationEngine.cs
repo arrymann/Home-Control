@@ -162,6 +162,13 @@ public sealed class AutomationEngine
     public Task<AutomationRunResult> RunNowAsync(Automation automation, AutomationNode trigger) =>
         StartRun(automation, trigger, RunOptions.Test);
 
+    /// <summary>
+    /// Fires one of an automation's triggers by hand (from the tray menu): it runs as if the
+    /// trigger had fired, waits included, restarting a run of it that is still going.
+    /// </summary>
+    public Task<AutomationRunResult> FireAsync(Automation automation, AutomationNode trigger) =>
+        StartRun(automation, trigger, RunOptions.Normal);
+
     /// <summary>Stops a running automation (e.g. it was turned off or deleted while waiting).</summary>
     public void Stop(string automationId)
     {

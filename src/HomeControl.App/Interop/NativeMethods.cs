@@ -39,6 +39,7 @@ internal static class NativeMethods
 
     public const uint MF_STRING = 0x0;
     public const uint MF_SEPARATOR = 0x800;
+    public const uint MF_POPUP = 0x10;
     public const uint MF_GRAYED = 0x1;
 
     public const uint TPM_RIGHTBUTTON = 0x0002;

@@ -118,6 +118,13 @@
                                         OnContent=""
                                         Toggled="OnEnabledToggled" />
                                     <Button
+                                        AutomationProperties.Name="{x:Bind PinTip}"
+                                        Click="OnPinClick"
+                                        Style="{StaticResource IconButtonStyle}"
+                                        ToolTipService.ToolTip="{x:Bind PinTip}">
+                                        <FontIcon FontSize="14" Glyph="{x:Bind PinGlyph}" />
+                                    </Button>
+                                    <Button
                                         AutomationProperties.Name="Delete"
                                         Click="OnDeleteClick"
                                         Style="{StaticResource IconButtonStyle}"
@@ -182,15 +189,30 @@
                     AutomationProperties.Name="Name"
                     PlaceholderText="Name"
                     TextChanged="OnNameChanged" />
-                <ToggleSwitch
-                    x:Name="EnabledSwitch"
+                <StackPanel
                     Grid.Column="2"
-                    MinWidth="0"
                     VerticalAlignment="Center"
-                    AutomationProperties.Name="Enabled"
-                    OffContent="Off"
-                    OnContent="On"
-                    Toggled="OnEditorEnabledToggled" />
+                    Orientation="Horizontal"
+                    Spacing="4">
+                    <ToggleSwitch
+                        x:Name="EnabledSwitch"
+                        MinWidth="0"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="Enabled"
+                        OffContent="Off"
+                        OnContent="On"
+                        Toggled="OnEditorEnabledToggled" />
+                    <Button
+                        x:Name="PinButton"
+                        VerticalAlignment="Center"
+                        Click="OnEditorPinClick"
+                        Style="{StaticResource IconButtonStyle}">
+                        <FontIcon
+                            x:Name="PinIcon"
+                            FontSize="14"
+                            Glyph="&#xE718;" />
+                    </Button>
+                </StackPanel>
                 <!-- One button per kind of node, marked with the colour of its cards, in a row of their own. -->
                 <StackPanel
                     Grid.Row="1"

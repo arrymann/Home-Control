@@ -187,6 +187,16 @@ internal static class SmokeTest
             errors.AddRange(issues.Select(i => $"Automation “{automation.Name}”: {i.Message}"));
         }
 
+        // Pinned to the tray menu: one with a single trigger runs straight away, one with several has a submenu of them.
+        automations.Automations[0].ShowInTrayMenu = true;
+        everything.ShowInTrayMenu = true;
+        var menu = host.BuildContextMenu().Texts().ToList();
+        var submenu = menu.FindIndex(t => t.StartsWith("Run “Every kind of node”", StringComparison.Ordinal));
+        if (!menu.Contains("Run “Lights on at sunset”") || submenu < 0 || submenu + 1 >= menu.Count || !menu[submenu + 1].StartsWith("  ", StringComparison.Ordinal))
+        {
+            errors.Add($"Tray menu: the pinned automations aren't in it as expected: {string.Join(" | ", menu)}");
+        }
+
         await Step("settings automations dark", () =>
         {
             SetTheme(ThemePreference.Dark);

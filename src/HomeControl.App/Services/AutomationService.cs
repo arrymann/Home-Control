@@ -178,6 +178,21 @@ internal sealed class AutomationService : IDisposable
         }
     }
 
+    /// <summary>A device's label, or null when there is no such device (for what nodes say).</summary>
+    public string? DeviceName(string? deviceId) =>
+        deviceId is null ? null : _app.Settings.Devices.FirstOrDefault(d => d.Id == deviceId && !d.Missing)?.Label.Trim();
+
+    /// <summary>A scene's name, or null when there is no such scene.</summary>
+    public string? SceneName(string? sceneId) =>
+        sceneId is null ? null : _app.Settings.Scenes.FirstOrDefault(s => s.Id == sceneId)?.Label;
+
+    /// <summary>What's wrong with an automation, with the devices, scenes and location there are now.</summary>
+    public IReadOnlyList<AutomationIssue> Validate(Automation automation) => AutomationGraph.Validate(
+        automation,
+        _app.Settings.Devices.Where(d => !d.Missing).Select(d => d.Id).ToHashSet(),
+        _app.Settings.Scenes.Select(s => s.Id).ToHashSet(),
+        Document.Location is not null);
+
     /// <summary>Today's sun times at the home's location, or null without a location.</summary>
     public (DateTimeOffset? Dawn, DateTimeOffset? Sunrise, DateTimeOffset? Sunset, DateTimeOffset? Dusk)? TodaysSun()
     {
@@ -234,8 +249,7 @@ internal sealed class AutomationService : IDisposable
 
         public PcStatus GetPcStatus() => service._pc.Status;
 
-        public string? GetDeviceName(string? deviceId) =>
-            deviceId is null ? null : App.Settings.Devices.FirstOrDefault(d => d.Id == deviceId && !d.Missing)?.Label.Trim();
+        public string? GetDeviceName(string? deviceId) => service.DeviceName(deviceId);
 
         public async Task<bool?> GetDeviceStateAsync(string deviceId, CancellationToken cancellationToken)
         {
@@ -297,8 +311,7 @@ internal sealed class AutomationService : IDisposable
             return result;
         }
 
-        public string? GetSceneName(string? sceneId) =>
-            sceneId is null ? null : App.Settings.Scenes.FirstOrDefault(s => s.Id == sceneId)?.Label;
+        public string? GetSceneName(string? sceneId) => service.SceneName(sceneId);
 
         public IReadOnlyList<string>? GetSceneDevices(string sceneId) =>
             App.Settings.Scenes.FirstOrDefault(s => s.Id == sceneId)?.DeviceIds.ToList();

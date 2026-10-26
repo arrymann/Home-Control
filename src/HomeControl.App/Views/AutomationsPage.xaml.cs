@@ -4,6 +4,7 @@ using HomeControl.Core.Automations;
 using HomeControl.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
@@ -24,6 +25,8 @@ public sealed class AutomationListItem
         Description = description;
         Status = status;
         Glyph = automation.Nodes.FirstOrDefault(n => n.Category == NodeCategory.Trigger) is { } trigger ? NodeView.Glyph(trigger) : "";
+        PinGlyph = PinGlyphFor(automation.ShowInTrayMenu);
+        PinTip = PinTipFor(automation.ShowInTrayMenu);
     }
 
     public string Id { get; }
@@ -37,6 +40,17 @@ public sealed class AutomationListItem
     public string Glyph { get; }
 
     public bool Enabled { get; }
+
+    /// <summary>The pin button's icon: a filled pin while it is pinned to the tray menu.</summary>
+    public string PinGlyph { get; }
+
+    public string PinTip { get; }
+
+    internal static string PinGlyphFor(bool pinned) => pinned ? "\uE842" : "\uE718";
+
+    internal static string PinTipFor(bool pinned) => pinned
+        ? "In the tray menu (right-click the tray icon to run it). Click to take it out."
+        : "Pin to the tray menu, to run it from there";
 }
 
 /// <summary>Settings › Automations: the location, the list of automations and the node editor.</summary>
@@ -179,12 +193,9 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
 
     private void RefreshList()
     {
-        var deviceIds = App.Host.Settings.Devices.Where(d => !d.Missing).Select(d => d.Id).ToHashSet();
-        var sceneIds = App.Host.Settings.Scenes.Select(s => s.Id).ToHashSet();
-        var hasLocation = Service.Document.Location is not null;
         var items = Service.Document.Automations.Select(a =>
         {
-            var issues = AutomationGraph.Validate(a, deviceIds, sceneIds, hasLocation);
+            var issues = Service.Validate(a);
             var status = issues.Any(i => i.Severity == IssueSeverity.Error)
                 ? "Needs attention: " + issues.First(i => i.Severity == IssueSeverity.Error).Message
                 : a.LastRun is { } lastRun
@@ -211,6 +222,16 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         if ((sender as FrameworkElement)?.DataContext is AutomationListItem item)
         {
             OpenEditor(item.Id);
+        }
+    }
+
+    private void OnPinClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is AutomationListItem item && Find(item.Id) is { } automation)
+        {
+            automation.ShowInTrayMenu = !automation.ShowInTrayMenu;
+            Service.Save();
+            RefreshList();
         }
     }
 
@@ -271,6 +292,7 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
         NameBox.Text = automation.Name;
         EnabledSwitch.IsOn = automation.Enabled;
         _loading = false;
+        ShowPinned();
 
         _undo.Clear();
         _undo.Push(Snapshot(automation));
@@ -349,9 +371,7 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
             return;
         }
 
-        var deviceIds = App.Host.Settings.Devices.Where(d => !d.Missing).Select(d => d.Id).ToHashSet();
-        var sceneIds = App.Host.Settings.Scenes.Select(s => s.Id).ToHashSet();
-        var issues = AutomationGraph.Validate(_editing, deviceIds, sceneIds, Service.Document.Location is not null);
+        var issues = Service.Validate(_editing);
         GraphCanvas.SetIssues(issues);
 
         if (issues.Count == 0)
@@ -377,6 +397,27 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
 
         _editing.Name = NameBox.Text.Trim();
         Service.Save();
+    }
+
+    private void OnEditorPinClick(object sender, RoutedEventArgs e)
+    {
+        if (_editing is null)
+        {
+            return;
+        }
+
+        _editing.ShowInTrayMenu = !_editing.ShowInTrayMenu;
+        Service.Save();
+        ShowPinned();
+    }
+
+    private void ShowPinned()
+    {
+        var pinned = _editing?.ShowInTrayMenu == true;
+        PinIcon.Glyph = AutomationListItem.PinGlyphFor(pinned);
+        var tip = AutomationListItem.PinTipFor(pinned);
+        ToolTipService.SetToolTip(PinButton, tip);
+        AutomationProperties.SetName(PinButton, tip);
     }
 
     private void OnEditorEnabledToggled(object sender, RoutedEventArgs e)
@@ -636,11 +677,9 @@ public sealed partial class AutomationsPage : Page, INodeEditorContext
 
     private static Automation? Find(string id) => Service.Document.Automations.FirstOrDefault(a => a.Id == id);
 
-    private static string? DeviceName(string? id) =>
-        id is null ? null : App.Host.Settings.Devices.FirstOrDefault(d => d.Id == id && !d.Missing)?.Label.Trim();
+    private static string? DeviceName(string? id) => Service.DeviceName(id);
 
-    private static string? SceneName(string? id) =>
-        id is null ? null : App.Host.Settings.Scenes.FirstOrDefault(s => s.Id == id)?.Label;
+    private static string? SceneName(string? id) => Service.SceneName(id);
 
     /// <summary>"today 21:14", "tomorrow 07:02", "yesterday 18:00", "Mon 07:00", "12 Oct 07:00".</summary>
     private static string Friendly(DateTimeOffset time)

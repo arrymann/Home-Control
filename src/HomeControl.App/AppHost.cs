@@ -1,6 +1,7 @@
 using HomeControl.Core.Assistant;
 using HomeControl.Core.Audio;
 using HomeControl.Core.Auth;
+using HomeControl.Core.Automations;
 using HomeControl.Core.Devices;
 using HomeControl.Core.GoogleHome;
 using HomeControl.Core.Security;
@@ -603,12 +604,30 @@ internal sealed class AppHost
     {
         _popup.Hide();
         var taskbarAtBottom = Taskbar.GetPlacement(point).Edge == TaskbarEdge.Bottom;
+        BuildContextMenu().Show(_messageWindow.Handle, point, openUpwards: taskbarAtBottom);
+    }
 
-        new ContextMenu()
+    /// <summary>The tray icon's right-click menu as it is now.</summary>
+    internal ContextMenu BuildContextMenu()
+    {
+        var menu = new ContextMenu()
             .Add("Open Home Control", ShowPopup, isDefault: true)
             .Add("Refresh device states", () => _ = Home.RefreshStatesAsync(), enabled: Home.ShowDevices)
             .Add("Turn all off", () => _ = Home.TurnAllOffAsync(), enabled: Home.ShowDevices)
-            .AddSeparator()
+            .AddSeparator();
+
+        var pinned = _automations.Document.Automations.Where(a => a.ShowInTrayMenu).ToList();
+        foreach (var automation in pinned)
+        {
+            AddPinnedAutomation(menu, automation);
+        }
+
+        if (pinned.Count > 0)
+        {
+            menu.AddSeparator();
+        }
+
+        return menu
             .Add(Settings.GoogleHome.Enabled ? "Sync devices from Google Home" : "Sign in to Google Home",
                 () =>
                 {
@@ -646,8 +665,63 @@ internal sealed class AppHost
             })
             .Add("Settings", () => OpenSettings())
             .AddSeparator()
-            .Add("Exit", Exit)
-            .Show(_messageWindow.Handle, point, openUpwards: taskbarAtBottom);
+            .Add("Exit", Exit);
+    }
+
+    /// <summary>
+    /// "Run “Movie night”": runs an automation pinned to the menu as if its trigger had fired;
+    /// one with several triggers has a submenu to pick the trigger. Greyed out while it isn't
+    /// ready (no trigger, a missing device…).
+    /// </summary>
+    private void AddPinnedAutomation(ContextMenu menu, Automation automation)
+    {
+        var text = $"Run “{MenuText(automation.Name)}”";
+        var triggers = automation.Nodes.Where(n => n.Category == NodeCategory.Trigger).OrderBy(n => n.Y).ThenBy(n => n.X).ToList();
+        var ready = triggers.Count > 0 && !_automations.Validate(automation).Any(i => i.Severity == IssueSeverity.Error);
+        if (triggers.Count <= 1)
+        {
+            var trigger = triggers.FirstOrDefault();
+            menu.Add(text, () => _ = trigger is null ? Task.CompletedTask : RunPinnedAsync(automation, trigger), enabled: ready);
+            return;
+        }
+
+        var choices = new ContextMenu();
+        foreach (var trigger in triggers)
+        {
+            choices.Add(MenuText(NodeText.Describe(trigger, _automations.DeviceName, _automations.SceneName)), () => _ = RunPinnedAsync(automation, trigger));
+        }
+
+        menu.AddSubmenu(text, choices, enabled: ready);
+    }
+
+    private async Task RunPinnedAsync(Automation automation, AutomationNode trigger)
+    {
+        try
+        {
+            // Failures show a notification of their own (the automation service); say what it
+            // did otherwise, as shortcuts do.
+            var result = await _automations.Engine.FireAsync(automation, trigger);
+            if (!result.Failed && !result.Cancelled)
+            {
+                _trayIcon.ShowNotification(automation.Name, result.Summary);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Running “{automation.Name}” from the tray menu", ex);
+        }
+    }
+
+    /// <summary>A name as a menu item shows it: shortened, and with "&amp;" doubled (alone, it marks the next letter as the item's key).</summary>
+    private static string MenuText(string text)
+    {
+        text = text.Trim();
+        if (text.Length > 60)
+        {
+            text = text[..59].TrimEnd() + "…";
+        }
+
+        return text.Replace("&", "&&");
     }
 
     private void CancelScheduledShutdown()

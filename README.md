@@ -65,7 +65,7 @@ A scene groups devices under one toggle. Turning it on turns every device in it 
 
 ## Automations
 
-Each automation is a small graph. **Triggers** (when) start it, **conditions** (if) choose a path through their *Yes* and *No* outputs, and **actions** (then) do the work. **New automation** starts an empty one. Add nodes with the editor's **Trigger**, **Condition** and **Action** buttons, or right-click the canvas. Wire nodes together by dragging from the dot on the right of one node to the dot on the left of the next. You can also drop a wire on an empty spot to add a connected node there. The editor has undo, zoom, and **Run now**, which runs the automation from a trigger and skips waits. Problems such as a missing device or scene, a node that isn't connected, or sun times without a location are flagged on the nodes.
+Each automation is a small graph. **Triggers** (when) start it, **conditions** (if) choose a path through their *Yes* and *No* outputs, and **actions** (then) do the work. **New automation** starts an empty one. Add nodes with the editor's **Trigger**, **Condition** and **Action** buttons, or right-click the canvas. Wire nodes together by dragging from the dot on the right of one node to the dot on the left of the next. You can also drop a wire on an empty spot to add a connected node there. The editor has undo, zoom, and **Run now**, which runs the automation from a trigger and skips waits. **Pin** an automation (the pin next to it in the list, or in the editor) to put it in the tray icon's right-click menu: *Run “Movie night”* runs it as if its trigger had fired, waits included, and says what it did. One with several triggers has a submenu to pick the trigger. Problems such as a missing device or scene, a node that isn't connected, or sun times without a location are flagged on the nodes.
 
 | Node | Kind | What it does |
 |---|---|---|
@@ -145,7 +145,7 @@ dotnet test tests/HomeControl.Core.Tests
 | | |
 |---|---|
 | Left-click tray icon | Open or close the device flyout (Esc or clicking elsewhere closes it) |
-| Right-click tray icon | Refresh device states, Turn all off, Sync devices, stop or start listening for claps (when an automation uses claps), mark the last claps as not yours or say it missed yours (clap events), Settings, Exit |
+| Right-click tray icon | Refresh device states, Turn all off, run pinned automations, Sync devices, stop or start listening for claps (when an automation uses claps), mark the last claps as not yours or say it missed yours (clap events), Settings, Exit |
 | Device shortcut | Toggles that device; a notification confirms it (can be turned off) |
 | Settings › Devices | Devices grouped by home and room. Groups collapse, and Home Control remembers which. Sync from Google Home, show or hide devices in the tray, rename, record shortcuts, **Try it** buttons; add Assistant devices by name. **Move up/down** sets the order within a room, which is also the order in the flyout. |
 | Settings › Scenes | Groups of devices with one toggle: devices, icon, shortcut, shown in the tray or not |

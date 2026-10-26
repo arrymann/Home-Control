@@ -851,6 +851,30 @@ public class AutomationEngineTests
     }
 
     [Fact]
+    public async Task Firing_by_hand_runs_as_the_trigger_would_waits_included()
+    {
+        // From the tray menu: unlike the editor's "Run now", waits are waited, and turned-off
+        // automations run too (it was asked for).
+        var automation = new Automation { Enabled = false, ShowInTrayMenu = true };
+        var trigger = automation.Add(new ClapTriggerNode());
+        var wait = automation.Add(new DelayActionNode { Seconds = 60 });
+        automation.Wire(trigger, wait);
+        automation.Wire(wait, automation.Add(new DeviceActionNode { DeviceId = "lamp" }));
+        var (engine, host, _) = Create(automation);
+
+        var result = await engine.FireAsync(automation, trigger);
+
+        Assert.False(result.Failed);
+        Assert.Equal([TimeSpan.FromSeconds(60)], host.Delays);
+        Assert.Equal(["TurnOn lamp"], host.Commands);
+        Assert.NotNull(automation.LastRun);
+
+        host.Delays.Clear();
+        await engine.RunNowAsync(automation, trigger);
+        Assert.Empty(host.Delays);
+    }
+
+    [Fact]
     public async Task Shutdown_triggers_match_the_kind()
     {
         Automation Make(ShutdownKind kind, string device)
@@ -1005,7 +1029,7 @@ public class AutomationStoreTests : IDisposable
     public void Round_trips_every_node_type()
     {
         var store = new AutomationStore(Path.Combine(_folder, "automations.json"));
-        var automation = new Automation { Name = "Everything" };
+        var automation = new Automation { Name = "Everything", ShowInTrayMenu = true };
         AutomationNode[] nodes =
         [
             new TimeTriggerNode { At = new TimePoint { Reference = TimeReference.Dusk, OffsetMinutes = 10 }, Days = Weekdays.Weekend },
@@ -1033,6 +1057,7 @@ public class AutomationStoreTests : IDisposable
         Assert.Null(store.LoadError);
         Assert.Equal(new GeoLocation(1.5, 2.5, "Somewhere"), loaded.Location);
         var copy = Assert.Single(loaded.Automations);
+        Assert.True(copy.ShowInTrayMenu);
         Assert.Equal(nodes.Select(n => n.GetType()), copy.Nodes.Select(n => n.GetType()));
         Assert.Equal(automation.Links, copy.Links);
         var dusk = Assert.IsType<TimeTriggerNode>(copy.Nodes[0]);

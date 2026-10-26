@@ -38,6 +38,9 @@ public sealed class Automation
 
     public bool Enabled { get; set; } = true;
 
+    /// <summary>Pinned to the tray icon's menu, to run it from there by hand.</summary>
+    public bool ShowInTrayMenu { get; set; }
+
     public List<AutomationNode> Nodes { get; set; } = [];
 
     public List<AutomationLink> Links { get; set; } = [];
